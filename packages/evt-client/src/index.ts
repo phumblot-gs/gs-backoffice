@@ -1,2 +1,3 @@
-export type { EvtClientConfig, EvtMessage } from './types.js';
+export type { EvtClientConfig } from './types.js';
 export { EvtClient } from './client.js';
+export { EvtApiError } from './errors.js';

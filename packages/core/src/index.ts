@@ -1,8 +1,21 @@
 export { AgentRole, AGENT_ROLES, type AgentRoleType } from './agents.js';
 export {
   EvtEventSchema,
-  BACKOFFICE_EVENT_PREFIXES,
+  EvtSourceSchema,
+  EvtActorSchema,
+  EvtScopeSchema,
+  BACKOFFICE_EVENT_TYPES,
+  createBackofficeEvent,
   type EvtEvent,
+  type EvtSource,
+  type EvtActor,
+  type EvtScope,
+  type EvtQueryParams,
+  type EvtQueryResult,
   type BackofficeEventType,
 } from './events.js';
-export { type RBACConfig, type DataSourcePermissions } from './rbac.js';
+export {
+  type RBACConfig,
+  type RBACGroupConfig,
+  type DataSourcePermissions,
+} from './rbac.js';

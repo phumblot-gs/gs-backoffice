@@ -9,6 +9,10 @@
       "import": "./dist/index.js"
     }
   },
+  "dependencies": {
+    "@gs-backoffice/core": "workspace:*",
+    "zod": "^3.24.2"
+  },
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",

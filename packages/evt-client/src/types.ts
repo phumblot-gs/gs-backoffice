@@ -1,13 +1,10 @@
-import type { EvtEvent } from '@gs-backoffice/core';
+import type { EvtEvent, EvtQueryParams, EvtQueryResult } from '@gs-backoffice/core';
 
 export interface EvtClientConfig {
-  baseUrl: string;
   apiKey: string;
+  baseUrl?: string;
+  timeout?: number;
+  retries?: number;
 }
 
-export interface EvtMessage {
-  id: string;
-  receiptHandle: string;
-  event: EvtEvent;
-  receivedAt: string;
-}
+export type { EvtEvent, EvtQueryParams, EvtQueryResult };

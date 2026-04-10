@@ -2,22 +2,16 @@ import type { AgentRoleType } from './agents.js';
 
 export interface DataSourcePermissions {
   read: boolean;
-  scopes: string[];
+  scopes?: string[];
+  eventTypes?: string[];
+  databases?: string[];
+}
+
+export interface RBACGroupConfig {
+  dataSources: Record<string, DataSourcePermissions>;
+  agents: AgentRoleType[];
 }
 
 export interface RBACConfig {
-  groups: Record<
-    string,
-    {
-      dataSources: {
-        hubspot?: DataSourcePermissions;
-        hyperline?: DataSourcePermissions;
-        pennylane?: DataSourcePermissions;
-        linear?: DataSourcePermissions;
-        evt?: { read: boolean; eventTypes: string[] };
-        notion?: { read: boolean; databases: string[] };
-      };
-      agents: AgentRoleType[];
-    }
-  >;
+  groups: Record<string, RBACGroupConfig>;
 }

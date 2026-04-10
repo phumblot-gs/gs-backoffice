@@ -14,11 +14,16 @@
   },
   "dependencies": {
     "@gs-backoffice/core": "workspace:*",
+    "@gs-backoffice/evt-client": "workspace:*",
+    "@gs-backoffice/jumpcloud-client": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "cors": "^2.8.5",
     "express": "^5.1.0",
     "pino": "^9.6.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "tsx": "^4.19.4",
