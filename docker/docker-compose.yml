@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  paperclip:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-dev-secret-change-in-production}"
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  evt-mock:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.evt-mock
+    ports:
+      - "4000:4000"
+    environment:
+      EVT_MOCK_PORT: "4000"
+
+volumes:
+  pgdata:
