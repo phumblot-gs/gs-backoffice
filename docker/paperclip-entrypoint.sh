@@ -13,6 +13,18 @@ if [ ! -f "$CONFIG_DIR/secrets/master.key" ]; then
   head -c 32 /dev/urandom | base64 > "$CONFIG_DIR/secrets/master.key"
 fi
 
+# Generate agent JWT secret if not set
+if [ -z "$PAPERCLIP_AGENT_JWT_SECRET" ]; then
+  export PAPERCLIP_AGENT_JWT_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
+fi
+
+# Write .env file for Paperclip to read DATABASE_URL and secrets
+cat > "$CONFIG_DIR/.env" <<ENV
+DATABASE_URL=${DATABASE_URL}
+PAPERCLIP_AGENT_JWT_SECRET=${PAPERCLIP_AGENT_JWT_SECRET}
+BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-$(head -c 32 /dev/urandom | base64 | tr -d '\n')}
+ENV
+
 # Generate config if it doesn't exist
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Creating Paperclip config at $CONFIG_FILE"
@@ -34,7 +46,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     "logDir": "$CONFIG_DIR/logs"
   },
   "server": {
-    "deploymentMode": "local_trusted",
+    "deploymentMode": "authenticated",
     "exposure": "private",
     "host": "0.0.0.0",
     "port": ${PORT:-3100},
@@ -71,5 +83,5 @@ if [ ! -f "$CONFIG_FILE" ]; then
 CONF
 fi
 
-echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, HOME=$PAPERCLIP_HOME)"
+echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, mode=authenticated)"
 exec paperclipai run --no-repair
