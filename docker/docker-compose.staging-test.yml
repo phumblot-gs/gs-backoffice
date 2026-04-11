@@ -31,6 +31,8 @@ services:
       PORT: '3100'
       BETTER_AUTH_SECRET: local-test-secret
       PAPERCLIP_TELEMETRY_DISABLED: '1'
+      PAPERCLIP_ALLOWED_HOSTNAMES: backoffice-staging.grand-shooting.com,mcp-backoffice-staging.grand-shooting.com
+      PAPERCLIP_PUBLIC_URL: http://localhost:3100
     depends_on:
       db:
         condition: service_healthy

@@ -79,6 +79,11 @@ variable "paperclip_allowed_hostnames" {
   default     = ""
 }
 
+variable "paperclip_public_url" {
+  description = "Public URL for Paperclip (used for auth callbacks)"
+  type        = string
+}
+
 variable "mcp_cpu" {
   description = "CPU units for MCP server task"
   type        = number
