@@ -20,10 +20,12 @@ interface AgentDef {
   reportsTo: string | null;
 }
 
+// Paperclip roles are enum: ceo, cto, cmo, cfo, engineer, designer, pm, qa, devops, researcher, general
+// We map our backoffice roles to the closest Paperclip role
 const AGENTS: AgentDef[] = [
   {
     name: 'Chef de Cabinet',
-    role: 'chief-of-staff',
+    role: 'ceo', // Chief of Staff → closest to CEO in Paperclip's org model
     description:
       'Routes employee requests to the right agent. Produces weekly internal digests. Publishes digests to Google Chat via EVT. Escalates unresolved tickets.',
     heartbeatCron: '0 9 * * 5', // Friday 9:00 Paris
@@ -32,48 +34,48 @@ const AGENTS: AgentDef[] = [
   },
   {
     name: 'Responsable Méthodes',
-    role: 'methods-officer',
+    role: 'engineer', // Methods Officer → implements code changes
     description:
       'Maintains all business process documentation in Notion. Identifies gaps, proposes new workflows. Can invoke Claude Code (headless) to implement changes.',
     heartbeatCron: '0 10 * * 1', // Monday 10:00
     monthlyBudgetUsd: 60,
-    reportsTo: 'chief-of-staff',
+    reportsTo: 'ceo',
   },
   {
     name: 'Responsable Données',
-    role: 'data-officer',
+    role: 'researcher', // Data Officer → data analysis
     description:
       'Runs consistency checks across all data registries. Alerts when inconsistencies are found. Answers data queries with RBAC enforcement.',
     heartbeatCron: '0 7 * * 1-5', // Weekdays 7:00
     monthlyBudgetUsd: 50,
-    reportsTo: 'chief-of-staff',
+    reportsTo: 'ceo',
   },
   {
     name: 'Responsable Finance',
-    role: 'finance',
+    role: 'cfo', // Finance → CFO
     description:
       'Executes invoicing workflows. Monitors overdue invoices. Assists with Pennylane reconciliation.',
     heartbeatCron: '0 8 * * 1-5', // Weekdays 8:00
     monthlyBudgetUsd: 50,
-    reportsTo: 'chief-of-staff',
+    reportsTo: 'ceo',
   },
   {
     name: 'Responsable RH',
-    role: 'hr',
+    role: 'pm', // HR → closest to PM (people management)
     description:
       'Answers HR process questions. Tracks HR deadlines (probation, training, contract renewals). Maintains HR knowledge base in Notion.',
     heartbeatCron: '0 9 * * 1', // Monday 9:00
     monthlyBudgetUsd: 30,
-    reportsTo: 'chief-of-staff',
+    reportsTo: 'ceo',
   },
   {
     name: 'Sales Ops',
-    role: 'sales-ops',
+    role: 'cmo', // Sales Ops → closest to CMO
     description:
       'Registers signed contracts. Updates HubSpot pipeline. Prepares prospect briefings.',
     heartbeatCron: '0 8 * * 1-5', // Weekdays 8:00
     monthlyBudgetUsd: 40,
-    reportsTo: 'chief-of-staff',
+    reportsTo: 'ceo',
   },
 ];
 
@@ -149,7 +151,7 @@ async function main() {
   }
   console.info('\nAdd these to your .env:');
   console.info(`  PAPERCLIP_COMPANY_ID=${company.id}`);
-  console.info(`  CHIEF_OF_STAFF_AGENT_ID=${agentIds['chief-of-staff']}`);
+  console.info(`  CHIEF_OF_STAFF_AGENT_ID=${agentIds['ceo']}`);
   console.info('');
 }
 

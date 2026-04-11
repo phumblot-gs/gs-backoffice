@@ -27,7 +27,7 @@ export async function backofficeAsk(
       input.urgency ? `\n**Urgency:** ${input.urgency}` : '',
     ].join(''),
     assigneeAgentId: chiefOfStaffAgentId,
-    priority: input.urgency === 'high' ? 'urgent' : 'normal',
+    priority: input.urgency === 'high' ? 'high' : 'medium',
   });
 
   return {
