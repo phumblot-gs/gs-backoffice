@@ -93,5 +93,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
 CONF
 fi
 
+# Override DATABASE_URL in the process env so the server sees the SSL version
+export DATABASE_URL="$PAPERCLIP_DATABASE_URL"
+
 echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, mode=authenticated)"
 exec paperclipai run --no-repair
