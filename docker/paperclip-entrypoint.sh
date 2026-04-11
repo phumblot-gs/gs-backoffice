@@ -18,9 +18,18 @@ if [ -z "$PAPERCLIP_AGENT_JWT_SECRET" ]; then
   export PAPERCLIP_AGENT_JWT_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 fi
 
+# Build connection string — add sslmode=require for RDS
+PAPERCLIP_DATABASE_URL="$DATABASE_URL"
+case "$DATABASE_URL" in
+  *rds.amazonaws.com*)
+    PAPERCLIP_DATABASE_URL="${DATABASE_URL}?sslmode=require"
+    ;;
+esac
+export PAPERCLIP_DATABASE_URL
+
 # Write .env file for Paperclip to read DATABASE_URL and secrets
 cat > "$CONFIG_DIR/.env" <<ENV
-DATABASE_URL=${DATABASE_URL}
+DATABASE_URL=${PAPERCLIP_DATABASE_URL}
 PAPERCLIP_AGENT_JWT_SECRET=${PAPERCLIP_AGENT_JWT_SECRET}
 BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-$(head -c 32 /dev/urandom | base64 | tr -d '\n')}
 ENV
@@ -37,7 +46,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   },
   "database": {
     "mode": "postgres",
-    "connectionString": "${DATABASE_URL}?sslmode=require",
+    "connectionString": "${PAPERCLIP_DATABASE_URL}",
     "backup": {
       "enabled": false
     }
