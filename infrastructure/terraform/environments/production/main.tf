@@ -79,7 +79,8 @@ module "compute" {
 
   paperclip_cpu               = var.paperclip_cpu
   paperclip_memory            = var.paperclip_memory
-  paperclip_allowed_hostnames = "\"${var.paperclip_domain}\",\"${var.mcp_domain}\""
+  paperclip_allowed_hostnames = "${var.paperclip_domain},${var.mcp_domain}"
+  paperclip_public_url        = "https://${var.paperclip_domain}"
   mcp_cpu                     = var.mcp_cpu
   mcp_memory                  = var.mcp_memory
 }

@@ -34,21 +34,24 @@ PAPERCLIP_AGENT_JWT_SECRET=${PAPERCLIP_AGENT_JWT_SECRET}
 BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-$(head -c 32 /dev/urandom | base64 | tr -d '\n')}
 ENV
 
-# Build allowed hostnames list — include container IP for ALB health checks
+# Build allowed hostnames JSON array
+# PAPERCLIP_ALLOWED_HOSTNAMES is a comma-separated list (no quotes)
+# e.g. "backoffice-staging.grand-shooting.com,mcp-backoffice-staging.grand-shooting.com"
 CONTAINER_IP=$(hostname -i 2>/dev/null | awk '{print $1}' || echo "")
-ALLOWED_HOSTS="${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
+HOSTNAMES_CSV="${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
 if [ -n "$CONTAINER_IP" ]; then
-  if [ -n "$ALLOWED_HOSTS" ]; then
-    ALLOWED_HOSTS="${ALLOWED_HOSTS},\"${CONTAINER_IP}\""
+  if [ -n "$HOSTNAMES_CSV" ]; then
+    HOSTNAMES_CSV="${HOSTNAMES_CSV},${CONTAINER_IP}"
   else
-    ALLOWED_HOSTS="\"${CONTAINER_IP}\""
+    HOSTNAMES_CSV="${CONTAINER_IP}"
   fi
 fi
+# Convert comma-separated list to JSON array: "a,b,c" -> "a","b","c"
+ALLOWED_JSON=$(echo "$HOSTNAMES_CSV" | tr ',' '\n' | sed 's/^.*$/"&"/' | tr '\n' ',' | sed 's/,$//')
 
-# Generate config if it doesn't exist
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "Creating Paperclip config at $CONFIG_FILE"
-  cat > "$CONFIG_FILE" <<CONF
+# Generate config — always regenerate to pick up new IPs
+echo "Creating Paperclip config at $CONFIG_FILE"
+cat > "$CONFIG_FILE" <<CONF
 {
   "\$meta": {
     "version": 1,
@@ -68,14 +71,15 @@ if [ ! -f "$CONFIG_FILE" ]; then
   },
   "server": {
     "deploymentMode": "authenticated",
-    "exposure": "private",
+    "exposure": "public",
     "host": "0.0.0.0",
     "port": ${PORT:-3100},
-    "allowedHostnames": [${ALLOWED_HOSTS}],
+    "allowedHostnames": [${ALLOWED_JSON}],
     "serveUi": true
   },
   "auth": {
-    "baseUrlMode": "auto",
+    "baseUrlMode": "explicit",
+    "publicBaseUrl": "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}",
     "disableSignUp": false
   },
   "telemetry": {
@@ -102,10 +106,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   }
 }
 CONF
-fi
 
 # Override DATABASE_URL in the process env so the server sees the SSL version
 export DATABASE_URL="$PAPERCLIP_DATABASE_URL"
 
-echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, mode=authenticated)"
+echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, allowedHostnames=[${ALLOWED_JSON}])"
 exec paperclipai run --no-repair
