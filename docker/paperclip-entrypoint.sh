@@ -37,7 +37,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   },
   "database": {
     "mode": "postgres",
-    "connectionString": "${DATABASE_URL}",
+    "connectionString": "${DATABASE_URL}?sslmode=require",
     "backup": {
       "enabled": false
     }
