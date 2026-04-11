@@ -21,10 +21,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
   "\$meta": {
     "version": 1,
     "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
-    "source": "docker-entrypoint"
+    "source": "onboard"
   },
   "database": {
-    "mode": "external-postgres",
+    "mode": "postgres",
     "backup": {
       "enabled": false
     }
