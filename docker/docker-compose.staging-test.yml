@@ -1,0 +1,62 @@
+## Test staging-like setup locally
+## Usage: docker compose -f docker/docker-compose.staging-test.yml up --build
+##
+## This replicates the ECS staging environment:
+## - PostgreSQL (simulates RDS)
+## - Paperclip (same Dockerfile.paperclip as staging, with DATABASE_URL)
+## - MCP server (same Dockerfile.mcp as staging)
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U paperclip -d paperclip']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - '5432:5432'
+
+  paperclip:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.paperclip
+    ports:
+      - '3100:3100'
+    environment:
+      DATABASE_URL: postgresql://paperclip:paperclip@db:5432/paperclip
+      PORT: '3100'
+      BETTER_AUTH_SECRET: local-test-secret
+      PAPERCLIP_TELEMETRY_DISABLED: '1'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp
+    ports:
+      - '3001:3001'
+    environment:
+      MCP_SERVER_PORT: '3001'
+      PAPERCLIP_API_URL: http://paperclip:3100
+      PAPERCLIP_COMPANY_ID: ''
+      CHIEF_OF_STAFF_AGENT_ID: ''
+      EVT_API_URL: http://evt-mock:4000
+      EVT_API_KEY: dev-key
+      NODE_ENV: staging
+    depends_on:
+      - paperclip
+
+  evt-mock:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.evt-mock
+    ports:
+      - '4000:4000'
+    environment:
+      EVT_MOCK_PORT: '4000'
