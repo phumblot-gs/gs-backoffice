@@ -20,14 +20,14 @@ A "virtual back office company" running on Paperclip with three layers:
 
 ### Agent Roles
 
-| Agent | Domain | Key Responsibilities |
-|---|---|---|
-| **Chief of Staff** | Routing, Comms & Coordination | Receives employee requests (via Claude.ai MCP), routes to the right agent, produces periodic digests, acts as the main interface |
-| **Methods Officer** | Processes & Documentation | Maintains and evolves all business process documentation in Notion. Identifies gaps, proposes new workflows. Can invoke Claude Code (headless) to implement changes to this project, subject to human approval. |
-| **Data Officer** | Data Integrity & BI | Monitors all company data registries for consistency. Runs scheduled checks against defined rules. Alerts the right people when inconsistencies are found. Answers data queries with access control enforcement. |
-| **Finance Agent** | Billing & Accounting | Executes invoicing workflows, monitors payment status, interacts with Hyperline and Pennylane |
-| **HR Agent** | People Ops | Answers HR process questions, tracks deadlines (probation, training), maintains HR knowledge base |
-| **Sales Ops Agent** | CRM & Contracts | Registers signed contracts, updates HubSpot, prepares prospect briefs |
+| Agent               | Domain                        | Key Responsibilities                                                                                                                                                                                             |
+| ------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Chief of Staff**  | Routing, Comms & Coordination | Receives employee requests (via Claude.ai MCP), routes to the right agent, produces periodic digests, acts as the main interface                                                                                 |
+| **Methods Officer** | Processes & Documentation     | Maintains and evolves all business process documentation in Notion. Identifies gaps, proposes new workflows. Can invoke Claude Code (headless) to implement changes to this project, subject to human approval.  |
+| **Data Officer**    | Data Integrity & BI           | Monitors all company data registries for consistency. Runs scheduled checks against defined rules. Alerts the right people when inconsistencies are found. Answers data queries with access control enforcement. |
+| **Finance Agent**   | Billing & Accounting          | Executes invoicing workflows, monitors payment status, interacts with Hyperline and Pennylane                                                                                                                    |
+| **HR Agent**        | People Ops                    | Answers HR process questions, tracks deadlines (probation, training), maintains HR knowledge base                                                                                                                |
+| **Sales Ops Agent** | CRM & Contracts               | Registers signed contracts, updates HubSpot, prepares prospect briefs                                                                                                                                            |
 
 ### Key Principles
 
@@ -65,22 +65,22 @@ Paperclip needs a PostgreSQL instance for its own state (tickets, agents, org ch
 
 ### External Integrations
 
-| Service | Purpose | Integration Method |
-|---|---|---|
+| Service                    | Purpose                                                          | Integration Method                                      |
+| -------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------- |
 | **EVT (gs-stream-events)** | Event bus — publish/consume business events, route notifications | REST API (`api.events.grand-shooting.com`) + SQS queues |
-| **Notion** | Knowledge base (processes, modules, features, NDAs, docs) | MCP `https://mcp.notion.com/mcp` |
-| **Asana** | Task tracking, sprint data | MCP `https://mcp.asana.com/sse` |
-| **HubSpot** | CRM — contacts, clients, deals, interactions | MCP `https://mcp.hubspot.com/anthropic` |
-| **Hyperline** | Billing — invoices, subscriptions, customers | MCP `https://mcp.hyperline.co/mcp` |
-| **Linear** | Product roadmap, bug tracking | MCP (to configure) |
-| **Google Drive** | Templates, shared documents, NDA storage | MCP `https://drivemcp.googleapis.com/mcp/v1` |
-| **Pennylane** | Accounting, AP control | REST API v2 (custom adapter) |
-| **Spendesk** | Purchase invoices registry (account not yet created) | REST API (future — adapter to build when available) |
-| **JumpCloud** | Identity & access management — user groups for RBAC | REST API v2 (`console.jumpcloud.com/api/v2`) |
-| **Google Chat** | Notifications, digests (via EVT events → webhook) | EVT consumer → Google Chat webhook |
-| **Gmail** | Email notifications | MCP `https://gmail.mcp.claude.com/mcp` |
-| **Anthropic API** | Agent LLM backbone | Claude Sonnet 4 via API |
-| **Claude Code** | Headless code generation (used by Methods Officer) | CLI `claude -p` with `--output-format json` |
+| **Notion**                 | Knowledge base (processes, modules, features, NDAs, docs)        | MCP `https://mcp.notion.com/mcp`                        |
+| **Asana**                  | Task tracking, sprint data                                       | MCP `https://mcp.asana.com/sse`                         |
+| **HubSpot**                | CRM — contacts, clients, deals, interactions                     | MCP `https://mcp.hubspot.com/anthropic`                 |
+| **Hyperline**              | Billing — invoices, subscriptions, customers                     | MCP `https://mcp.hyperline.co/mcp`                      |
+| **Linear**                 | Product roadmap, bug tracking                                    | MCP (to configure)                                      |
+| **Google Drive**           | Templates, shared documents, NDA storage                         | MCP `https://drivemcp.googleapis.com/mcp/v1`            |
+| **Pennylane**              | Accounting, AP control                                           | REST API v2 (custom adapter)                            |
+| **Spendesk**               | Purchase invoices registry (account not yet created)             | REST API (future — adapter to build when available)     |
+| **JumpCloud**              | Identity & access management — user groups for RBAC              | REST API v2 (`console.jumpcloud.com/api/v2`)            |
+| **Google Chat**            | Notifications, digests (via EVT events → webhook)                | EVT consumer → Google Chat webhook                      |
+| **Gmail**                  | Email notifications                                              | MCP `https://gmail.mcp.claude.com/mcp`                  |
+| **Anthropic API**          | Agent LLM backbone                                               | Claude Sonnet 4 via API                                 |
+| **Claude Code**            | Headless code generation (used by Methods Officer)               | CLI `claude -p` with `--output-format json`             |
 
 ---
 
@@ -151,24 +151,24 @@ Employees interact with the back office directly from Claude.ai via a **custom M
 // Tools exposed to Claude.ai users:
 
 // Process Q&A
-"backoffice_ask"          // Ask any question about internal processes
-                          // → Chief of Staff routes to the right agent or Notion
+'backoffice_ask'; // Ask any question about internal processes
+// → Chief of Staff routes to the right agent or Notion
 
 // Workflow triggers
-"backoffice_start_workflow" // Start a business workflow (e.g., "invoice client X")
-                           // → Creates a Paperclip ticket, returns ticket ID
+'backoffice_start_workflow'; // Start a business workflow (e.g., "invoice client X")
+// → Creates a Paperclip ticket, returns ticket ID
 
 // Ticket interaction
-"backoffice_ticket_update" // Upload a file, add info to an existing ticket
-"backoffice_ticket_status" // Check status of a ticket
+'backoffice_ticket_update'; // Upload a file, add info to an existing ticket
+'backoffice_ticket_status'; // Check status of a ticket
 
 // Data queries (with RBAC)
-"backoffice_data_query"    // Ask for data from any registry
-                           // → Data Officer checks permissions via JumpCloud
-                           //   groups before responding
+'backoffice_data_query'; // Ask for data from any registry
+// → Data Officer checks permissions via JumpCloud
+//   groups before responding
 
 // Digest
-"backoffice_digest"        // Get the latest internal digest
+'backoffice_digest'; // Get the latest internal digest
 ```
 
 ### Authentication Flow
@@ -207,14 +207,14 @@ interface RBACConfig {
   groups: {
     [groupName: string]: {
       dataSources: {
-        hubspot?: { read: boolean; scopes: string[] };      // e.g., ["contacts", "deals"]
-        hyperline?: { read: boolean; scopes: string[] };     // e.g., ["invoices", "subscriptions"]
+        hubspot?: { read: boolean; scopes: string[] }; // e.g., ["contacts", "deals"]
+        hyperline?: { read: boolean; scopes: string[] }; // e.g., ["invoices", "subscriptions"]
         pennylane?: { read: boolean; scopes: string[] };
         linear?: { read: boolean; scopes: string[] };
         evt?: { read: boolean; eventTypes: string[] };
         notion?: { read: boolean; databases: string[] };
       };
-      agents: string[];  // Which agents this group can interact with
+      agents: string[]; // Which agents this group can interact with
     };
   };
 }
@@ -231,11 +231,11 @@ The RBAC matrix is stored in a dedicated Notion database (managed by the Methods
 ### Chief of Staff
 
 ```yaml
-name: "Chef de Cabinet"
+name: 'Chef de Cabinet'
 role: chief-of-staff
-reportsTo: null  # Top of org
-heartbeat: "0 9 * * 5"  # Friday 9:00 Paris — weekly digest
-monthlyBudget: 40  # USD
+reportsTo: null # Top of org
+heartbeat: '0 9 * * 5' # Friday 9:00 Paris — weekly digest
+monthlyBudget: 40 # USD
 responsibilities:
   - Route employee requests to the right agent
   - Produce weekly internal digest (aggregate from Asana, HubSpot, Hyperline, Linear)
@@ -249,11 +249,11 @@ evt_consumes: [backoffice.*.completed, backoffice.*.failed]
 ### Methods Officer
 
 ```yaml
-name: "Responsable Méthodes"
+name: 'Responsable Méthodes'
 role: methods-officer
 reportsTo: chief-of-staff
-heartbeat: "0 10 * * 1"  # Monday 10:00 — weekly process review
-monthlyBudget: 60  # USD (higher — invokes Claude Code)
+heartbeat: '0 10 * * 1' # Monday 10:00 — weekly process review
+monthlyBudget: 60 # USD (higher — invokes Claude Code)
 responsibilities:
   - Maintain all business process documentation in Notion
   - Ensure consistency across process docs (no contradictions, no gaps)
@@ -266,13 +266,13 @@ evt_publishes: [backoffice.process.*, backoffice.evolution.*]
 evt_consumes: [backoffice.*.completed]
 claude_code:
   enabled: true
-  permission_mode: "acceptEdits"
-  allowed_tools: ["Read", "Write", "Edit", "Bash(pnpm *)", "Bash(git *)"]
+  permission_mode: 'acceptEdits'
+  allowed_tools: ['Read', 'Write', 'Edit', 'Bash(pnpm *)', 'Bash(git *)']
   max_turns: 20
   approval_gates:
-    - before_implementation: true   # CEO must approve the proposal
-    - before_commit: true           # CEO must approve the PR
-    - before_deploy: true           # CEO must approve staging → production
+    - before_implementation: true # CEO must approve the proposal
+    - before_commit: true # CEO must approve the PR
+    - before_deploy: true # CEO must approve staging → production
 ```
 
 ### Data Officer
@@ -328,10 +328,10 @@ registries:
 ### Finance Agent
 
 ```yaml
-name: "Responsable Finance"
+name: 'Responsable Finance'
 role: finance
 reportsTo: chief-of-staff
-heartbeat: "0 8 * * 1-5"
+heartbeat: '0 8 * * 1-5'
 monthlyBudget: 50
 responsibilities:
   - Execute invoicing workflows (details defined by Methods Officer)
@@ -345,10 +345,10 @@ evt_consumes: [backoffice.finance.*, billing.*]
 ### HR Agent
 
 ```yaml
-name: "Responsable RH"
+name: 'Responsable RH'
 role: hr
 reportsTo: chief-of-staff
-heartbeat: "0 9 * * 1"
+heartbeat: '0 9 * * 1'
 monthlyBudget: 30
 responsibilities:
   - Answer HR process questions
@@ -362,10 +362,10 @@ evt_consumes: [backoffice.hr.*]
 ### Sales Ops Agent
 
 ```yaml
-name: "Sales Ops"
+name: 'Sales Ops'
 role: sales-ops
 reportsTo: chief-of-staff
-heartbeat: "0 8 * * 1-5"
+heartbeat: '0 8 * * 1-5'
 monthlyBudget: 40
 responsibilities:
   - Register signed contracts (details defined by Methods Officer)
@@ -452,13 +452,13 @@ gs-backoffice/
 
 ### Environment Matrix
 
-| | Local | Staging | Production |
-|---|---|---|---|
-| **Compute** | Docker Compose | ECS Fargate | ECS Fargate |
-| **Database** | PostgreSQL 16 (Docker) | RDS db.t4g.micro | RDS db.t4g.small |
-| **EVT** | Mock EVT server (Docker) | EVT staging (`gs-stream-api-staging`) | EVT production |
-| **MCP Server** | localhost:3001 | mcp-backoffice-staging.grand-shooting.com | mcp-backoffice.grand-shooting.com |
-| **Agent budgets** | Unlimited | $50/month total | $300/month total |
+|                   | Local                    | Staging                                   | Production                        |
+| ----------------- | ------------------------ | ----------------------------------------- | --------------------------------- |
+| **Compute**       | Docker Compose           | ECS Fargate                               | ECS Fargate                       |
+| **Database**      | PostgreSQL 16 (Docker)   | RDS db.t4g.micro                          | RDS db.t4g.small                  |
+| **EVT**           | Mock EVT server (Docker) | EVT staging (`gs-stream-api-staging`)     | EVT production                    |
+| **MCP Server**    | localhost:3001           | mcp-backoffice-staging.grand-shooting.com | mcp-backoffice.grand-shooting.com |
+| **Agent budgets** | Unlimited                | $50/month total                           | $300/month total                  |
 
 ### Branch Strategy
 
@@ -529,6 +529,7 @@ NODE_ENV=development|staging|production
 ## 11. Phase Plan
 
 ### Phase 1: Scaffolding (Week 1)
+
 - Monorepo + TypeScript + ESLint + Prettier + Vitest + Turborepo
 - Docker Compose (Paperclip + PostgreSQL + mock EVT)
 - GitHub Actions CI
@@ -536,6 +537,7 @@ NODE_ENV=development|staging|production
 - Verify: `pnpm install && pnpm build && pnpm test`
 
 ### Phase 2: Core (Week 2)
+
 - EVT adapter (publish, consume, acknowledge)
 - JumpCloud adapter (groups → RBAC)
 - Notion knowledge base adapter
@@ -543,23 +545,27 @@ NODE_ENV=development|staging|production
 - Chief of Staff with basic routing
 
 ### Phase 3: Methods Officer (Week 3)
+
 - Methods Officer agent
 - Claude Code headless adapter
 - Approval gate workflow
 - First self-test: Methods Officer documents its own processes
 
 ### Phase 4: Data Officer (Week 3-4)
+
 - Consistency rule engine
 - Registry adapters (HubSpot, Hyperline, Notion, Linear)
 - Scheduled checks via heartbeat
 - Alerts via EVT → Google Chat
 
 ### Phase 5: AWS (Week 4)
+
 - Terraform modules
 - Staging deploy + workflow
 - Production deploy + approval gate
 
 ### Phase 6: Remaining Agents (Week 5-6)
+
 - Finance, HR, Sales Ops (skeletons — workflows via Methods Officer)
 - E2E testing
 

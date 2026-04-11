@@ -3,10 +3,7 @@ import type { PaperclipClient } from '../paperclip-client.js';
 
 export const backofficeStartWorkflowSchema = z.object({
   workflow: z.string().describe('Name of the workflow to start (e.g., "invoice client X")'),
-  parameters: z
-    .record(z.string())
-    .optional()
-    .describe('Key-value parameters for the workflow'),
+  parameters: z.record(z.string()).optional().describe('Key-value parameters for the workflow'),
   notes: z.string().optional().describe('Additional notes for the workflow'),
 });
 

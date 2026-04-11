@@ -28,3 +28,10 @@ data/
 
 # Test
 coverage/
+
+# Terraform
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl

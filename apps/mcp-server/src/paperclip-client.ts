@@ -39,10 +39,7 @@ export class PaperclipClient {
     return this.request('GET', `/issues/${issueId}`);
   }
 
-  async addComment(
-    issueId: string,
-    body: string,
-  ): Promise<{ id: string }> {
+  async addComment(issueId: string, body: string): Promise<{ id: string }> {
     return this.request('POST', `/issues/${issueId}/comments`, { body });
   }
 

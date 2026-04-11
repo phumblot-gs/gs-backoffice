@@ -97,10 +97,7 @@ export class JumpCloudClient {
           throw new JumpCloudApiError(0, path, `Request timeout after ${this.timeout}ms`);
         }
 
-        if (
-          error instanceof JumpCloudApiError &&
-          (error.status === 401 || error.status === 403)
-        ) {
+        if (error instanceof JumpCloudApiError && (error.status === 401 || error.status === 403)) {
           throw error;
         }
 

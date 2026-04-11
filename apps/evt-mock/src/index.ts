@@ -26,8 +26,7 @@ app.get('/health', (_req, res) => {
 // Publish an event — POST /v1/events
 app.post('/v1/events', (req, res) => {
   const body = req.body as Partial<StoredEvent>;
-  const eventId =
-    body.eventId ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const eventId = body.eventId ?? `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const event: StoredEvent = {
     eventId,
     eventType: body.eventType ?? 'unknown',

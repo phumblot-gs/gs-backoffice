@@ -111,9 +111,7 @@ describe('EvtClient', () => {
     });
 
     it('sends cursor for pagination', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse({ events: [], limit: 100, hasMore: false }),
-      );
+      mockFetch.mockResolvedValueOnce(jsonResponse({ events: [], limit: 100, hasMore: false }));
 
       await client.query({ cursor: 'evt-prev-100' });
 

@@ -11,10 +11,7 @@ export const backofficeDataQuerySchema = z.object({
 
 export type BackofficeDataQueryInput = z.infer<typeof backofficeDataQuerySchema>;
 
-export async function backofficeDataQuery(
-  input: BackofficeDataQueryInput,
-  rbac: RBACContext,
-) {
+export async function backofficeDataQuery(input: BackofficeDataQueryInput, rbac: RBACContext) {
   // Check RBAC permissions for the requested data source
   if (input.dataSource) {
     const sourcePerms = rbac.dataSources[input.dataSource];

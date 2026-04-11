@@ -4,10 +4,7 @@ import type { PaperclipClient } from '../paperclip-client.js';
 export const backofficeAskSchema = z.object({
   question: z.string().describe('The question to ask the back office'),
   context: z.string().optional().describe('Additional context for the question'),
-  urgency: z
-    .enum(['low', 'normal', 'high'])
-    .optional()
-    .describe('Urgency level of the question'),
+  urgency: z.enum(['low', 'normal', 'high']).optional().describe('Urgency level of the question'),
 });
 
 export type BackofficeAskInput = z.infer<typeof backofficeAskSchema>;
