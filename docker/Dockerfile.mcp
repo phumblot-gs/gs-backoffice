@@ -1,0 +1,32 @@
+FROM node:22-slim AS base
+RUN corepack enable
+
+FROM base AS deps
+WORKDIR /app
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/core/package.json packages/core/
+COPY packages/evt-client/package.json packages/evt-client/
+COPY packages/jumpcloud-client/package.json packages/jumpcloud-client/
+COPY apps/mcp-server/package.json apps/mcp-server/
+COPY apps/evt-mock/package.json apps/evt-mock/
+RUN pnpm install --frozen-lockfile --prod=false
+
+FROM base AS build
+WORKDIR /app
+COPY --from=deps /app /app
+COPY packages/core/ packages/core/
+COPY packages/evt-client/ packages/evt-client/
+COPY packages/jumpcloud-client/ packages/jumpcloud-client/
+COPY apps/mcp-server/ apps/mcp-server/
+COPY tsconfig.base.json ./
+RUN pnpm --filter @gs-backoffice/core build \
+  && pnpm --filter @gs-backoffice/evt-client build \
+  && pnpm --filter @gs-backoffice/jumpcloud-client build \
+  && pnpm --filter @gs-backoffice/mcp-server build
+
+FROM base AS production
+WORKDIR /app
+COPY --from=build /app /app
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["node", "apps/mcp-server/dist/index.js"]

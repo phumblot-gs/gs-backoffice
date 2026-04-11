@@ -1,0 +1,186 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-1
+  ENVIRONMENT: production
+  ECR_PAPERCLIP_REPO: gs-backoffice-paperclip
+  ECR_MCP_REPO: gs-backoffice-mcp
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Lint
+        run: pnpm lint
+
+  docker:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=prod-$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push Paperclip image
+        run: |
+          docker build \
+            -f docker/Dockerfile.paperclip \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_PAPERCLIP_REPO }}:${{ steps.meta.outputs.tag }} \
+            .
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_PAPERCLIP_REPO }}:${{ steps.meta.outputs.tag }}
+
+      - name: Build & push MCP server image
+        run: |
+          docker build \
+            -f docker/Dockerfile.mcp \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_MCP_REPO }}:${{ steps.meta.outputs.tag }} \
+            .
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_MCP_REPO }}:${{ steps.meta.outputs.tag }}
+
+  approval:
+    name: Production Approval
+    runs-on: ubuntu-latest
+    needs: docker
+    environment: production
+
+    steps:
+      - name: Approved
+        run: echo "Production deployment approved"
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    needs: [docker, approval]
+    defaults:
+      run:
+        working-directory: infrastructure/terraform/environments/production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.0"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="image_tag=${{ needs.docker.outputs.image_tag }}" \
+            -var="ecr_paperclip_url=${{ secrets.ECR_PAPERCLIP_URL }}" \
+            -var="ecr_mcp_url=${{ secrets.ECR_MCP_URL }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+  deploy:
+    name: Deploy ECS Services
+    runs-on: ubuntu-latest
+    needs: [docker, terraform]
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update Paperclip service
+        run: |
+          aws ecs update-service \
+            --cluster gs-backoffice-production \
+            --service paperclip \
+            --force-new-deployment
+
+      - name: Update MCP server service
+        run: |
+          aws ecs update-service \
+            --cluster gs-backoffice-production \
+            --service mcp-server \
+            --force-new-deployment
+
+      - name: Wait for services stable
+        run: |
+          aws ecs wait services-stable \
+            --cluster gs-backoffice-production \
+            --services paperclip mcp-server
+        timeout-minutes: 10
+
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [terraform, deploy]
+    if: always()
+
+    steps:
+      - name: Deployment Status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Production deployment successful!"
+            echo "  Paperclip: https://backoffice.grand-shooting.com"
+            echo "  MCP Server: https://mcp-backoffice.grand-shooting.com"
+          else
+            echo "❌ Production deployment failed!"
+            exit 1
+          fi
