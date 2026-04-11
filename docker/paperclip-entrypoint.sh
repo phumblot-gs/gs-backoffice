@@ -34,6 +34,17 @@ PAPERCLIP_AGENT_JWT_SECRET=${PAPERCLIP_AGENT_JWT_SECRET}
 BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-$(head -c 32 /dev/urandom | base64 | tr -d '\n')}
 ENV
 
+# Build allowed hostnames list — include container IP for ALB health checks
+CONTAINER_IP=$(hostname -i 2>/dev/null | awk '{print $1}' || echo "")
+ALLOWED_HOSTS="${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
+if [ -n "$CONTAINER_IP" ]; then
+  if [ -n "$ALLOWED_HOSTS" ]; then
+    ALLOWED_HOSTS="${ALLOWED_HOSTS},\"${CONTAINER_IP}\""
+  else
+    ALLOWED_HOSTS="\"${CONTAINER_IP}\""
+  fi
+fi
+
 # Generate config if it doesn't exist
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Creating Paperclip config at $CONFIG_FILE"
@@ -60,7 +71,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     "exposure": "private",
     "host": "0.0.0.0",
     "port": ${PORT:-3100},
-    "allowedHostnames": [${PAPERCLIP_ALLOWED_HOSTNAMES:-}],
+    "allowedHostnames": [${ALLOWED_HOSTS}],
     "serveUi": true
   },
   "auth": {
