@@ -76,10 +76,11 @@ module "compute" {
   db_secret_arn   = module.database.db_secret_arn
   app_secrets_arn = module.secrets.app_secrets_arn
 
-  paperclip_cpu    = var.paperclip_cpu
-  paperclip_memory = var.paperclip_memory
-  mcp_cpu          = var.mcp_cpu
-  mcp_memory       = var.mcp_memory
+  paperclip_cpu               = var.paperclip_cpu
+  paperclip_memory            = var.paperclip_memory
+  paperclip_allowed_hostnames = "\"${var.paperclip_domain}\",\"${var.mcp_domain}\""
+  mcp_cpu                     = var.mcp_cpu
+  mcp_memory                  = var.mcp_memory
 }
 
 # -----------------------------------------------------------------------------

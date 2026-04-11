@@ -73,6 +73,12 @@ variable "paperclip_memory" {
   default     = 512
 }
 
+variable "paperclip_allowed_hostnames" {
+  description = "Comma-separated allowed hostnames for Paperclip authenticated mode"
+  type        = string
+  default     = ""
+}
+
 variable "mcp_cpu" {
   description = "CPU units for MCP server task"
   type        = number

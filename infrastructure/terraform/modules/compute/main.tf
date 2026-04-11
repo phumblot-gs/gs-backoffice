@@ -131,6 +131,7 @@ resource "aws_ecs_task_definition" "paperclip" {
       { name = "SERVE_UI", value = "true" },
       { name = "NODE_ENV", value = var.environment },
       { name = "PAPERCLIP_TELEMETRY_DISABLED", value = "1" },
+      { name = "PAPERCLIP_ALLOWED_HOSTNAMES", value = var.paperclip_allowed_hostnames },
     ]
     secrets = [
       {

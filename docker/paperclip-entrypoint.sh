@@ -60,7 +60,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     "exposure": "private",
     "host": "0.0.0.0",
     "port": ${PORT:-3100},
-    "allowedHostnames": [],
+    "allowedHostnames": [${PAPERCLIP_ALLOWED_HOSTNAMES:-}],
     "serveUi": true
   },
   "auth": {
