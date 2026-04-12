@@ -6,7 +6,7 @@ RUN apt-get update \
 
 FROM base AS production
 WORKDIR /app
-RUN npm install --global paperclipai@latest
+RUN npm install --global paperclipai@latest @anthropic-ai/claude-code@latest
 COPY docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production
