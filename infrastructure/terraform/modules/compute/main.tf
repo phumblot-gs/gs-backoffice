@@ -95,15 +95,27 @@ resource "aws_iam_role_policy" "ecs_task_secrets" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "secretsmanager:GetSecretValue"
-      ]
-      Resource = [
-        var.app_secrets_arn
-      ]
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          var.app_secrets_arn
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = ["*"]
+      }
+    ]
   })
 }
 
@@ -234,6 +246,8 @@ resource "aws_ecs_service" "paperclip" {
   task_definition = aws_ecs_task_definition.paperclip.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+
+  enable_execute_command = true
 
   network_configuration {
     subnets          = var.private_subnet_ids
