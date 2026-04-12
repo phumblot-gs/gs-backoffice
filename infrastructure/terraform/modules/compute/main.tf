@@ -201,6 +201,10 @@ resource "aws_ecs_task_definition" "mcp" {
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_URL::"
       },
       {
+        name      = "PAPERCLIP_API_KEY"
+        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_KEY::"
+      },
+      {
         name      = "PAPERCLIP_COMPANY_ID"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_COMPANY_ID::"
       },
