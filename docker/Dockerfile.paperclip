@@ -7,10 +7,12 @@ RUN apt-get update \
 FROM base AS production
 WORKDIR /app
 RUN npm install --global paperclipai@latest @anthropic-ai/claude-code@latest
-COPY docker/paperclip-entrypoint.sh /entrypoint.sh
+RUN mkdir -p /paperclip && chown node:node /paperclip
+COPY --chown=node:node docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production
 ENV PAPERCLIP_HOME=/paperclip
 ENV HOST=0.0.0.0
+USER node
 EXPOSE 3100
 ENTRYPOINT ["/entrypoint.sh"]
