@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { JumpCloudClient } from './client.js';
 import { JumpCloudApiError } from './errors.js';
-import type { RBACConfig } from '@gs-backoffice/core';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -84,53 +83,6 @@ describe('JumpCloudClient', () => {
       const members = await client.getGroupMembers('grp-1');
       expect(members).toHaveLength(2);
       expect(members[0].id).toBe('user-1');
-    });
-  });
-
-  describe('resolvePermissions', () => {
-    const rbacConfig: RBACConfig = {
-      groups: {
-        Finance: {
-          dataSources: {
-            hyperline: { read: true, scopes: ['invoices', 'subscriptions'] },
-            pennylane: { read: true, scopes: ['accounting'] },
-          },
-          agents: ['chief-of-staff', 'finance'],
-        },
-        Engineering: {
-          dataSources: {
-            linear: { read: true, scopes: ['bugs', 'features'] },
-          },
-          agents: ['chief-of-staff', 'data-officer'],
-        },
-      },
-    };
-
-    it('merges permissions from multiple groups', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([
-          { id: 'grp-1', name: 'Finance', type: 'user_group' },
-          { id: 'grp-2', name: 'Engineering', type: 'user_group' },
-        ]),
-      );
-
-      const perms = await client.resolvePermissions('user-1', rbacConfig);
-      expect(perms.groups).toHaveLength(2);
-      expect(perms.allowedAgents).toContain('chief-of-staff');
-      expect(perms.allowedAgents).toContain('finance');
-      expect(perms.allowedAgents).toContain('data-officer');
-      expect(perms.dataSources.hyperline).toBeDefined();
-      expect(perms.dataSources.linear).toBeDefined();
-    });
-
-    it('returns empty permissions for unmatched groups', async () => {
-      mockFetch.mockResolvedValueOnce(
-        jsonResponse([{ id: 'grp-99', name: 'Marketing', type: 'user_group' }]),
-      );
-
-      const perms = await client.resolvePermissions('user-1', rbacConfig);
-      expect(perms.allowedAgents).toHaveLength(0);
-      expect(Object.keys(perms.dataSources)).toHaveLength(0);
     });
   });
 });

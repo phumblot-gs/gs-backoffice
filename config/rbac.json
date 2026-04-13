@@ -1,0 +1,51 @@
+{
+  "groups": {
+    "Direction": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["*"] },
+        "paperclip": {
+          "actions": ["read", "create_ticket", "update_ticket"],
+          "scopes": ["*"]
+        }
+      },
+      "workflows": ["*"]
+    },
+    "Finance": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["Finance", "Général"] },
+        "paperclip": {
+          "actions": ["read", "create_ticket"],
+          "scopes": ["finance"]
+        }
+      },
+      "workflows": ["invoice_client", "payment_followup"]
+    },
+    "Commercial": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["Commercial", "Général"] },
+        "paperclip": {
+          "actions": ["read", "create_ticket"],
+          "scopes": ["sales"]
+        }
+      },
+      "workflows": ["register_contract", "prospect_brief"]
+    },
+    "Engineering": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["Engineering", "Général"] },
+        "paperclip": { "actions": ["read"], "scopes": ["engineering"] }
+      },
+      "workflows": ["bug_report", "feature_request"]
+    },
+    "RH": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["RH", "Général"] },
+        "paperclip": {
+          "actions": ["read", "create_ticket"],
+          "scopes": ["hr"]
+        }
+      },
+      "workflows": ["onboarding", "training_request"]
+    }
+  }
+}

@@ -24,7 +24,7 @@ export class PaperclipClient {
     priority?: string;
     labels?: string[];
     metadata?: Record<string, unknown>;
-  }): Promise<{ id: string; shortId: string }> {
+  }): Promise<Record<string, unknown>> {
     return this.request('POST', `/companies/${params.companyId}/issues`, {
       title: params.title,
       description: params.description,

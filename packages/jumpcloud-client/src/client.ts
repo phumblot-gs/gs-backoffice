@@ -1,4 +1,3 @@
-import type { RBACConfig, DataSourcePermissions } from '@gs-backoffice/core';
 import type { JumpCloudConfig, UserGroup, GroupMember } from './types.js';
 import { UserGroupsResponseSchema, GroupMembersResponseSchema } from './types.js';
 import { JumpCloudApiError } from './errors.js';
@@ -28,41 +27,6 @@ export class JumpCloudClient {
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
     const data = await this.request(`/usergroups/${groupId}/members`);
     return GroupMembersResponseSchema.parse(data);
-  }
-
-  async resolvePermissions(
-    userId: string,
-    rbacConfig: RBACConfig,
-  ): Promise<{
-    groups: UserGroup[];
-    allowedAgents: string[];
-    dataSources: Record<string, DataSourcePermissions>;
-  }> {
-    const groups = await this.getUserGroups(userId);
-    const groupNames = new Set(groups.map((g) => g.name));
-
-    const allowedAgents = new Set<string>();
-    const mergedDataSources: Record<string, DataSourcePermissions> = {};
-
-    for (const [groupName, groupConfig] of Object.entries(rbacConfig.groups)) {
-      if (!groupNames.has(groupName)) continue;
-
-      for (const agent of groupConfig.agents) {
-        allowedAgents.add(agent);
-      }
-
-      for (const [source, perms] of Object.entries(groupConfig.dataSources)) {
-        if (!mergedDataSources[source]) {
-          mergedDataSources[source] = { ...perms };
-        }
-      }
-    }
-
-    return {
-      groups,
-      allowedAgents: [...allowedAgents],
-      dataSources: mergedDataSources,
-    };
   }
 
   private async request(path: string): Promise<unknown> {

@@ -1,15 +1,9 @@
-import type { RBACConfig, DataSourcePermissions } from '@gs-backoffice/core';
+import { type RBACConfig, resolvePermissions } from '@gs-backoffice/core';
 import { JumpCloudClient } from '@gs-backoffice/jumpcloud-client';
 import pino from 'pino';
+import type { ToolContext } from '../plugins/types.js';
 
 const logger = pino({ name: 'rbac' });
-
-export interface RBACContext {
-  userId: string;
-  groups: string[];
-  allowedAgents: string[];
-  dataSources: Record<string, DataSourcePermissions>;
-}
 
 export class RBACResolver {
   private readonly jumpcloud: JumpCloudClient | null;
@@ -20,36 +14,31 @@ export class RBACResolver {
     this.rbacConfig = rbacConfig;
   }
 
-  async resolve(userId: string): Promise<RBACContext> {
-    // In dev mode without JumpCloud, grant all permissions
+  async resolve(userId: string, userEmail: string): Promise<ToolContext> {
     if (!this.jumpcloud) {
       logger.warn({ userId }, 'No JumpCloud client — granting all permissions (dev mode)');
-      const allAgents = new Set<string>();
-      const allDataSources: Record<string, DataSourcePermissions> = {};
-      for (const group of Object.values(this.rbacConfig.groups)) {
-        for (const agent of group.agents) allAgents.add(agent);
-        for (const [k, v] of Object.entries(group.dataSources)) {
-          allDataSources[k] = v;
-        }
-      }
       return {
         userId,
+        userEmail,
         groups: ['*'],
-        allowedAgents: [...allAgents],
-        dataSources: allDataSources,
+        permissions: ['*'],
       };
     }
 
-    const perms = await this.jumpcloud.resolvePermissions(userId, this.rbacConfig);
+    const userGroups = await this.jumpcloud.getUserGroups(userId);
+    const groupNames = userGroups.map((g) => g.name);
+    const resolved = resolvePermissions(this.rbacConfig, groupNames);
+
     logger.info(
-      { userId, groups: perms.groups.map((g) => g.name), agents: perms.allowedAgents },
+      { userId, userEmail, groups: groupNames, permissions: resolved.permissions },
       'RBAC resolved',
     );
+
     return {
       userId,
-      groups: perms.groups.map((g) => g.name),
-      allowedAgents: perms.allowedAgents,
-      dataSources: perms.dataSources,
+      userEmail,
+      groups: groupNames,
+      permissions: resolved.permissions,
     };
   }
 }

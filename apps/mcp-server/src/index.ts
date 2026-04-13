@@ -1,56 +1,103 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import express, { type Express, type Request, type Response } from 'express';
 import cors from 'cors';
 import pino from 'pino';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { createBackofficeMcpServer } from './server.js';
-import { PaperclipClient } from './paperclip-client.js';
-import { RBACResolver } from './auth/rbac.js';
+import { RBACConfigSchema } from '@gs-backoffice/core';
+import { EvtClient } from '@gs-backoffice/evt-client';
 import { JumpCloudClient } from '@gs-backoffice/jumpcloud-client';
-import type { RBACConfig } from '@gs-backoffice/core';
+import { createHenriMcpServer } from './server.js';
+import { PluginManager } from './plugins/manager.js';
+import { NotionPlugin } from './plugins/notion/index.js';
+import { PaperclipPlugin } from './plugins/paperclip/index.js';
+import { RBACResolver } from './auth/rbac.js';
 
-const logger = pino({ name: 'mcp-server' });
+const logger = pino({ name: 'henri' });
 
-// Configuration from environment
+// --- Configuration ---
 const PORT = parseInt(process.env.MCP_SERVER_PORT ?? '3001', 10);
-const PAPERCLIP_API_URL = process.env.PAPERCLIP_API_URL ?? 'http://localhost:3100';
-const PAPERCLIP_API_KEY = process.env.PAPERCLIP_API_KEY;
-const PAPERCLIP_COMPANY_ID = process.env.PAPERCLIP_COMPANY_ID ?? '';
-const CHIEF_OF_STAFF_AGENT_ID = process.env.CHIEF_OF_STAFF_AGENT_ID ?? '';
-const JUMPCLOUD_API_KEY = process.env.JUMPCLOUD_API_KEY;
-const JUMPCLOUD_ORG_ID = process.env.JUMPCLOUD_ORG_ID;
+const NODE_ENV = process.env.NODE_ENV ?? 'development';
 
-// RBAC config — loaded from env or defaults to open access in dev
-const rbacConfig: RBACConfig = { groups: {} };
+// --- Load RBAC config ---
+function loadRBACConfig() {
+  try {
+    const configPath = resolve(process.cwd(), 'config', 'rbac.json');
+    const raw = readFileSync(configPath, 'utf-8');
+    return RBACConfigSchema.parse(JSON.parse(raw));
+  } catch {
+    logger.warn('Could not load config/rbac.json — using empty RBAC config (all access in dev)');
+    return { groups: {} };
+  }
+}
 
-// Initialize clients
-const paperclip = new PaperclipClient({
-  apiUrl: PAPERCLIP_API_URL,
-  apiKey: PAPERCLIP_API_KEY,
-});
+const rbacConfig = loadRBACConfig();
 
+// --- Initialize EVT client ---
+const evtClient =
+  process.env.EVT_API_KEY && process.env.EVT_API_URL
+    ? new EvtClient({
+        apiKey: process.env.EVT_API_KEY,
+        baseUrl: process.env.EVT_API_URL,
+      })
+    : null;
+
+// --- Initialize JumpCloud client ---
 const jumpcloud =
-  JUMPCLOUD_API_KEY && JUMPCLOUD_ORG_ID
-    ? new JumpCloudClient({ apiKey: JUMPCLOUD_API_KEY, orgId: JUMPCLOUD_ORG_ID })
+  process.env.JUMPCLOUD_API_KEY && process.env.JUMPCLOUD_ORG_ID
+    ? new JumpCloudClient({
+        apiKey: process.env.JUMPCLOUD_API_KEY,
+        orgId: process.env.JUMPCLOUD_ORG_ID,
+      })
     : null;
 
 const rbacResolver = new RBACResolver(jumpcloud, rbacConfig);
 
-// Session management
+// --- Initialize Plugin Manager ---
+const pluginManager = new PluginManager({ evtClient, environment: NODE_ENV });
+
+async function initializePlugins() {
+  const credentials: Record<string, string> = {};
+  for (const key of [
+    'NOTION_API_TOKEN',
+    'PAPERCLIP_API_URL',
+    'PAPERCLIP_API_KEY',
+    'PAPERCLIP_COMPANY_ID',
+    'CHIEF_OF_STAFF_AGENT_ID',
+  ]) {
+    if (process.env[key]) credentials[key] = process.env[key];
+  }
+
+  const pluginConfig = { credentials, evtClient, logger };
+
+  await pluginManager.register(new NotionPlugin(), pluginConfig);
+  await pluginManager.register(new PaperclipPlugin(), pluginConfig);
+
+  logger.info(
+    { plugins: pluginManager.getAllTools().map((t) => t.name) },
+    'All plugins initialized',
+  );
+}
+
+// --- Session management ---
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-// Express app
+// --- Express app ---
 const app: Express = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'gs-backoffice-mcp', paperclipUrl: PAPERCLIP_API_URL });
+  res.json({
+    status: 'ok',
+    service: 'henri',
+    plugins: pluginManager.getAllTools().map((t) => t.name),
+    paperclipUrl: process.env.PAPERCLIP_API_URL,
+  });
 });
 
-// MCP endpoint — POST /mcp
 app.post('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -76,12 +123,11 @@ app.post('/mcp', async (req: Request, res: Response) => {
         }
       };
 
-      const server = createBackofficeMcpServer({
-        paperclip,
-        rbacResolver,
-        companyId: PAPERCLIP_COMPANY_ID,
-        chiefOfStaffAgentId: CHIEF_OF_STAFF_AGENT_ID,
-      });
+      // Resolve user context (dev mode: all permissions)
+      // TODO: replace with OAuth identity when implemented
+      const userContext = await rbacResolver.resolve('dev-user', 'dev@grand-shooting.com');
+
+      const server = createHenriMcpServer(pluginManager, userContext);
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;
@@ -114,7 +160,6 @@ app.post('/mcp', async (req: Request, res: Response) => {
   }
 });
 
-// MCP endpoint — GET /mcp (SSE stream)
 app.get('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports[sessionId]) {
@@ -124,7 +169,6 @@ app.get('/mcp', async (req: Request, res: Response) => {
   await transports[sessionId].handleRequest(req, res);
 });
 
-// MCP endpoint — DELETE /mcp (session termination)
 app.delete('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports[sessionId]) {
@@ -134,8 +178,16 @@ app.delete('/mcp', async (req: Request, res: Response) => {
   await transports[sessionId].handleRequest(req, res);
 });
 
-app.listen(PORT, () => {
-  logger.info({ port: PORT, paperclipUrl: PAPERCLIP_API_URL }, 'MCP server started');
-});
+// --- Start ---
+initializePlugins()
+  .then(() => {
+    app.listen(PORT, () => {
+      logger.info({ port: PORT, environment: NODE_ENV }, 'Henri MCP server started');
+    });
+  })
+  .catch((err) => {
+    logger.fatal({ error: err }, 'Failed to initialize plugins');
+    process.exit(1);
+  });
 
 export { app };
