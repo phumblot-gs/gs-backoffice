@@ -15,10 +15,9 @@ export class RBACResolver {
   }
 
   async resolve(userId: string, userEmail: string): Promise<ToolContext> {
-    // Dev mode: no real user identity yet (OAuth not implemented)
-    // Grant all permissions until OAuth provides real employee identity
+    // Dev mode: grant all permissions
     if (userId === 'dev-user' || !this.jumpcloud) {
-      logger.warn({ userId }, 'No authenticated user — granting all permissions (dev mode)');
+      logger.warn({ userId, userEmail }, 'Dev mode — granting all permissions');
       return {
         userId,
         userEmail,
@@ -27,20 +26,33 @@ export class RBACResolver {
       };
     }
 
-    const userGroups = await this.jumpcloud.getUserGroups(userId);
-    const groupNames = userGroups.map((g) => g.name);
-    const resolved = resolvePermissions(this.rbacConfig, groupNames);
+    try {
+      const userGroups = await this.jumpcloud.getUserGroups(userId);
+      const groupNames = userGroups.map((g) => g.name);
+      const resolved = resolvePermissions(this.rbacConfig, groupNames);
 
-    logger.info(
-      { userId, userEmail, groups: groupNames, permissions: resolved.permissions },
-      'RBAC resolved',
-    );
+      logger.info(
+        { userId, userEmail, groups: groupNames, permissions: resolved.permissions },
+        'RBAC resolved',
+      );
 
-    return {
-      userId,
-      userEmail,
-      groups: groupNames,
-      permissions: resolved.permissions,
-    };
+      return {
+        userId,
+        userEmail,
+        groups: groupNames,
+        permissions: resolved.permissions,
+      };
+    } catch (err) {
+      logger.warn(
+        { userId, userEmail, error: err },
+        'JumpCloud lookup failed — granting all permissions as fallback',
+      );
+      return {
+        userId,
+        userEmail,
+        groups: ['*'],
+        permissions: ['*'],
+      };
+    }
   }
 }

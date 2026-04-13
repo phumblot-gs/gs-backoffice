@@ -18,12 +18,15 @@
     "@gs-backoffice/jumpcloud-client": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@notionhq/client": "^2.3.0",
+    "better-auth": "^1.4.18",
+    "better-sqlite3": "^11.9.1",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "pino": "^9.6.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",

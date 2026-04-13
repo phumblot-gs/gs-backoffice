@@ -232,6 +232,14 @@ resource "aws_ecs_task_definition" "mcp" {
         name      = "NOTION_API_TOKEN"
         valueFrom = "${var.app_secrets_arn}:NOTION_API_TOKEN::"
       },
+      {
+        name      = "GOOGLE_CLIENT_ID"
+        valueFrom = "${var.app_secrets_arn}:GOOGLE_CLIENT_ID::"
+      },
+      {
+        name      = "GOOGLE_CLIENT_SECRET"
+        valueFrom = "${var.app_secrets_arn}:GOOGLE_CLIENT_SECRET::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"
