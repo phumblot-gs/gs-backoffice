@@ -197,6 +197,10 @@ resource "aws_ecs_task_definition" "mcp" {
     ]
     secrets = [
       {
+        name      = "DATABASE_URL"
+        valueFrom = "${var.db_secret_arn}:url::"
+      },
+      {
         name      = "PAPERCLIP_API_URL"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_URL::"
       },
