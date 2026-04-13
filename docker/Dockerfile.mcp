@@ -27,6 +27,7 @@ RUN pnpm --filter @gs-backoffice/core build \
 FROM base AS production
 WORKDIR /app
 COPY --from=build /app /app
+COPY config/ config/
 ENV NODE_ENV=production
 EXPOSE 3001
 CMD ["node", "apps/mcp-server/dist/index.js"]
