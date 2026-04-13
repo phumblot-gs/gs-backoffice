@@ -15,8 +15,10 @@ export class RBACResolver {
   }
 
   async resolve(userId: string, userEmail: string): Promise<ToolContext> {
-    if (!this.jumpcloud) {
-      logger.warn({ userId }, 'No JumpCloud client — granting all permissions (dev mode)');
+    // Dev mode: no real user identity yet (OAuth not implemented)
+    // Grant all permissions until OAuth provides real employee identity
+    if (userId === 'dev-user' || !this.jumpcloud) {
+      logger.warn({ userId }, 'No authenticated user — granting all permissions (dev mode)');
       return {
         userId,
         userEmail,
