@@ -14,12 +14,34 @@ import { PluginManager } from './plugins/manager.js';
 import { NotionPlugin } from './plugins/notion/index.js';
 import { PaperclipPlugin } from './plugins/paperclip/index.js';
 import { RBACResolver } from './auth/rbac.js';
+import {
+  createHenriAuth,
+  getUserEmailFromToken,
+  toNodeHandler,
+  oAuthDiscoveryMetadata,
+  oAuthProtectedResourceMetadata,
+} from './auth/oauth.js';
+import { signInPageHTML } from './auth/sign-in.js';
 
 const logger = pino({ name: 'henri' });
 
 // --- Configuration ---
 const PORT = parseInt(process.env.MCP_SERVER_PORT ?? '3001', 10);
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
+const BASE_URL =
+  process.env.HENRI_PUBLIC_URL ??
+  (NODE_ENV === 'production'
+    ? 'https://mcp-backoffice.grand-shooting.com'
+    : NODE_ENV === 'staging'
+      ? 'https://mcp-backoffice-staging.grand-shooting.com'
+      : `http://localhost:${PORT}`);
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
+const ALLOWED_DOMAIN = process.env.ALLOWED_EMAIL_DOMAIN ?? 'grand-shooting.com';
+
+// --- OAuth enabled? ---
+const oauthEnabled = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 
 // --- Load RBAC config ---
 function loadRBACConfig() {
@@ -28,12 +50,23 @@ function loadRBACConfig() {
     const raw = readFileSync(configPath, 'utf-8');
     return RBACConfigSchema.parse(JSON.parse(raw));
   } catch {
-    logger.warn('Could not load config/rbac.json — using empty RBAC config (all access in dev)');
+    logger.warn('Could not load config/rbac.json — using empty RBAC config');
     return { groups: {} };
   }
 }
 
 const rbacConfig = loadRBACConfig();
+
+// --- Initialize OAuth (if credentials are set) ---
+const auth = oauthEnabled
+  ? createHenriAuth({
+      baseURL: BASE_URL,
+      mcpResourceURL: `${BASE_URL}/mcp`,
+      googleClientId: GOOGLE_CLIENT_ID,
+      googleClientSecret: GOOGLE_CLIENT_SECRET,
+      allowedDomain: ALLOWED_DOMAIN,
+    })
+  : null;
 
 // --- Initialize EVT client ---
 const evtClient =
@@ -71,7 +104,6 @@ async function initializePlugins() {
   }
 
   const pluginConfig = { credentials, evtClient, logger };
-
   await pluginManager.register(new NotionPlugin(), pluginConfig);
   await pluginManager.register(new PaperclipPlugin(), pluginConfig);
 
@@ -86,18 +118,70 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 
 // --- Express app ---
 const app: Express = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+
+// --- OAuth routes (mounted BEFORE body parsers for Better Auth) ---
+if (auth) {
+  app.all('/api/auth/{*splat}', toNodeHandler(auth));
+  app.options('/.well-known/oauth-authorization-server', cors());
+  app.get(
+    '/.well-known/oauth-authorization-server',
+    cors(),
+    toNodeHandler(oAuthDiscoveryMetadata(auth)),
+  );
+  app.options('/.well-known/oauth-protected-resource/mcp', cors());
+  app.get(
+    '/.well-known/oauth-protected-resource/mcp',
+    cors(),
+    toNodeHandler(oAuthProtectedResourceMetadata(auth)),
+  );
+  app.get('/auth/sign-in', (_req, res) => {
+    res.type('html').send(signInPageHTML(BASE_URL));
+  });
+  app.get('/auth/callback', (_req, res) => {
+    res
+      .type('html')
+      .send(
+        '<html><body><script>window.close()</script>Authentication successful. You can close this window.</body></html>',
+      );
+  });
+  logger.info({ baseURL: BASE_URL }, 'OAuth enabled with Google');
+} else {
+  logger.warn('OAuth disabled — GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Using dev mode.');
+}
+
 app.use(express.json());
 
+// --- Health check ---
 app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'henri',
+    oauth: oauthEnabled ? 'enabled' : 'disabled',
     plugins: pluginManager.getAllTools().map((t) => t.name),
     paperclipUrl: process.env.PAPERCLIP_API_URL,
   });
 });
 
+// --- Resolve user from request ---
+async function resolveUserContext(req: Request) {
+  if (auth) {
+    const authHeader = req.headers.authorization;
+    const user = await getUserEmailFromToken(auth, authHeader);
+    if (user) {
+      // Verify domain restriction
+      if (!user.email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+        return null;
+      }
+      return rbacResolver.resolve(user.userId, user.email);
+    }
+    return null;
+  }
+  // Dev mode — no OAuth
+  return rbacResolver.resolve('dev-user', 'dev@grand-shooting.com');
+}
+
+// --- MCP endpoints ---
 app.post('/mcp', async (req: Request, res: Response) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -107,10 +191,25 @@ app.post('/mcp', async (req: Request, res: Response) => {
     if (sessionId && transports[sessionId]) {
       transport = transports[sessionId];
     } else if (!sessionId && isInitializeRequest(req.body)) {
+      // Resolve authenticated user
+      const userContext = await resolveUserContext(req);
+      if (oauthEnabled && !userContext) {
+        const metadataUrl = `${BASE_URL}/.well-known/oauth-protected-resource/mcp`;
+        res
+          .status(401)
+          .set('WWW-Authenticate', `Bearer resource_metadata="${metadataUrl}"`)
+          .json({
+            jsonrpc: '2.0',
+            error: { code: -32001, message: 'Authentication required' },
+            id: null,
+          });
+        return;
+      }
+
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
-          logger.info({ sessionId: sid }, 'MCP session initialized');
+          logger.info({ sessionId: sid, user: userContext?.userEmail }, 'MCP session initialized');
           transports[sid] = transport;
         },
       });
@@ -123,11 +222,15 @@ app.post('/mcp', async (req: Request, res: Response) => {
         }
       };
 
-      // Resolve user context (dev mode: all permissions)
-      // TODO: replace with OAuth identity when implemented
-      const userContext = await rbacResolver.resolve('dev-user', 'dev@grand-shooting.com');
-
-      const server = createHenriMcpServer(pluginManager, userContext);
+      const server = createHenriMcpServer(
+        pluginManager,
+        userContext ?? {
+          userId: 'dev-user',
+          userEmail: 'dev@grand-shooting.com',
+          groups: ['*'],
+          permissions: ['*'],
+        },
+      );
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;
@@ -182,7 +285,10 @@ app.delete('/mcp', async (req: Request, res: Response) => {
 initializePlugins()
   .then(() => {
     app.listen(PORT, () => {
-      logger.info({ port: PORT, environment: NODE_ENV }, 'Henri MCP server started');
+      logger.info(
+        { port: PORT, environment: NODE_ENV, oauth: oauthEnabled, baseURL: BASE_URL },
+        'Henri MCP server started',
+      );
     });
   })
   .catch((err) => {
