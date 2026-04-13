@@ -96,6 +96,7 @@ export async function createHenriAuth(config: OAuthConfig): Promise<any> {
       options: '-c search_path=henri_auth,public',
     });
     await ensureAuthTables(pool);
+    setAuthPool(pool);
     database = pool;
     logger.info({ rds: isRds }, 'OAuth using PostgreSQL for sessions');
   } else {
@@ -139,6 +140,13 @@ export async function createHenriAuth(config: OAuthConfig): Promise<any> {
   return auth;
 }
 
+// Store pool reference for user lookup
+let authPool: Pool | null = null;
+
+export function setAuthPool(pool: Pool): void {
+  authPool = pool;
+}
+
 export async function getUserEmailFromToken(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   auth: any,
@@ -153,18 +161,20 @@ export async function getUserEmailFromToken(
     const session = await auth.api.getMcpSession({ headers });
     if (!session?.userId) return null;
 
-    const userSession = await auth.api.getSession({ headers });
-    const email = userSession?.user?.email as string | undefined;
+    const userId = session.userId as string;
 
-    if (!email) {
-      logger.warn({ userId: session.userId }, 'MCP session valid but no user email found');
-      return { userId: session.userId as string, email: '' };
+    // Look up email from henri_auth."user" table directly
+    if (authPool) {
+      const result = await authPool.query('SELECT email FROM henri_auth."user" WHERE id = $1', [
+        userId,
+      ]);
+      if (result.rows.length > 0 && result.rows[0].email) {
+        return { userId, email: result.rows[0].email };
+      }
     }
 
-    return {
-      userId: session.userId as string,
-      email,
-    };
+    logger.warn({ userId }, 'MCP session valid but could not resolve email');
+    return { userId, email: '' };
   } catch (err) {
     logger.warn({ error: err }, 'Failed to verify MCP token');
     return null;
