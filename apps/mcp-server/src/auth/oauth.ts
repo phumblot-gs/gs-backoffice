@@ -16,8 +16,117 @@ export interface OAuthConfig {
   databaseUrl?: string;
 }
 
+async function ensureAuthTables(pool: Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "user" (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        "emailVerified" BOOLEAN NOT NULL DEFAULT false,
+        image TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "session" (
+        id TEXT PRIMARY KEY,
+        token TEXT NOT NULL UNIQUE,
+        "expiresAt" TIMESTAMPTZ NOT NULL,
+        "ipAddress" TEXT,
+        "userAgent" TEXT,
+        "userId" TEXT NOT NULL REFERENCES "user"(id),
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "account" (
+        id TEXT PRIMARY KEY,
+        "accountId" TEXT NOT NULL,
+        "providerId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL REFERENCES "user"(id),
+        "accessToken" TEXT,
+        "refreshToken" TEXT,
+        "idToken" TEXT,
+        "accessTokenExpiresAt" TIMESTAMPTZ,
+        "refreshTokenExpiresAt" TIMESTAMPTZ,
+        scope TEXT,
+        password TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "verification" (
+        id TEXT PRIMARY KEY,
+        identifier TEXT NOT NULL,
+        value TEXT NOT NULL,
+        "expiresAt" TIMESTAMPTZ NOT NULL,
+        "createdAt" TIMESTAMPTZ,
+        "updatedAt" TIMESTAMPTZ
+      );
+      CREATE TABLE IF NOT EXISTS "oauthApplication" (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        icon TEXT,
+        metadata TEXT,
+        "clientId" TEXT NOT NULL UNIQUE,
+        "clientSecret" TEXT,
+        "redirectUrls" TEXT NOT NULL,
+        type TEXT NOT NULL,
+        disabled BOOLEAN NOT NULL DEFAULT false,
+        "userId" TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "oauthAccessToken" (
+        id TEXT PRIMARY KEY,
+        "accessToken" TEXT NOT NULL UNIQUE,
+        "refreshToken" TEXT UNIQUE,
+        "accessTokenExpiresAt" TIMESTAMPTZ NOT NULL,
+        "refreshTokenExpiresAt" TIMESTAMPTZ,
+        "clientId" TEXT NOT NULL,
+        "userId" TEXT,
+        scopes TEXT NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "oauthRefreshToken" (
+        id TEXT PRIMARY KEY,
+        "refreshToken" TEXT NOT NULL UNIQUE,
+        "accessTokenId" TEXT NOT NULL,
+        "expiresAt" TIMESTAMPTZ NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "oauthAuthorizationCode" (
+        id TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        "clientId" TEXT NOT NULL,
+        "userId" TEXT,
+        scopes TEXT NOT NULL,
+        "redirectURI" TEXT NOT NULL,
+        "codeChallenge" TEXT,
+        "codeChallengeMethod" TEXT,
+        "expiresAt" TIMESTAMPTZ NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS "oauthConsent" (
+        id TEXT PRIMARY KEY,
+        "clientId" TEXT NOT NULL,
+        "userId" TEXT NOT NULL,
+        scopes TEXT NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "consentGiven" BOOLEAN NOT NULL DEFAULT false
+      );
+    `);
+    logger.info('Auth database tables ensured');
+  } finally {
+    client.release();
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createHenriAuth(config: OAuthConfig): any {
+export async function createHenriAuth(config: OAuthConfig): Promise<any> {
   let database: Parameters<typeof betterAuth>[0]['database'];
 
   if (config.databaseUrl) {
@@ -26,6 +135,7 @@ export function createHenriAuth(config: OAuthConfig): any {
       connectionString: config.databaseUrl,
       ssl: isRds ? { rejectUnauthorized: false } : undefined,
     });
+    await ensureAuthTables(pool);
     database = pool;
     logger.info({ rds: isRds }, 'OAuth using PostgreSQL for sessions');
   } else {

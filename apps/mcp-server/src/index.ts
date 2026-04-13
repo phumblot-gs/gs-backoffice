@@ -57,17 +57,9 @@ function loadRBACConfig() {
 
 const rbacConfig = loadRBACConfig();
 
-// --- Initialize OAuth (if credentials are set) ---
-const auth = oauthEnabled
-  ? createHenriAuth({
-      baseURL: BASE_URL,
-      mcpResourceURL: `${BASE_URL}/mcp`,
-      googleClientId: GOOGLE_CLIENT_ID,
-      googleClientSecret: GOOGLE_CLIENT_SECRET,
-      allowedDomain: ALLOWED_DOMAIN,
-      databaseUrl: process.env.HENRI_AUTH_DATABASE_URL ?? process.env.DATABASE_URL,
-    })
-  : null;
+// --- Initialize OAuth (if credentials are set) — initialized in start() ---
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let auth: any = null;
 
 // --- Initialize EVT client ---
 const evtClient =
@@ -121,35 +113,17 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 const app: Express = express();
 app.use(cors({ origin: true, credentials: true }));
 
-// --- OAuth routes (mounted BEFORE body parsers for Better Auth) ---
-if (auth) {
-  app.all('/api/auth/{*splat}', toNodeHandler(auth));
-  app.options('/.well-known/oauth-authorization-server', cors());
-  app.get(
-    '/.well-known/oauth-authorization-server',
-    cors(),
-    toNodeHandler(oAuthDiscoveryMetadata(auth)),
-  );
-  app.options('/.well-known/oauth-protected-resource/mcp', cors());
-  app.get(
-    '/.well-known/oauth-protected-resource/mcp',
-    cors(),
-    toNodeHandler(oAuthProtectedResourceMetadata(auth)),
-  );
-  app.get('/auth/sign-in', (_req, res) => {
-    res.type('html').send(signInPageHTML(BASE_URL));
-  });
-  app.get('/auth/callback', (_req, res) => {
-    res
-      .type('html')
-      .send(
-        '<html><body><script>window.close()</script>Authentication successful. You can close this window.</body></html>',
-      );
-  });
-  logger.info({ baseURL: BASE_URL }, 'OAuth enabled with Google');
-} else {
-  logger.warn('OAuth disabled — GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Using dev mode.');
-}
+// --- Static auth routes (don't need auth instance) ---
+app.get('/auth/sign-in', (_req, res) => {
+  res.type('html').send(signInPageHTML(BASE_URL));
+});
+app.get('/auth/callback', (_req, res) => {
+  res
+    .type('html')
+    .send(
+      '<html><body><script>window.close()</script>Authentication successful. You can close this window.</body></html>',
+    );
+});
 
 app.use(express.json());
 
@@ -283,7 +257,38 @@ app.delete('/mcp', async (req: Request, res: Response) => {
 });
 
 // --- Start ---
-initializePlugins()
+async function start() {
+  // Initialize OAuth (async — creates DB tables)
+  if (oauthEnabled) {
+    auth = await createHenriAuth({
+      baseURL: BASE_URL,
+      mcpResourceURL: `${BASE_URL}/mcp`,
+      googleClientId: GOOGLE_CLIENT_ID,
+      googleClientSecret: GOOGLE_CLIENT_SECRET,
+      allowedDomain: ALLOWED_DOMAIN,
+      databaseUrl: process.env.HENRI_AUTH_DATABASE_URL ?? process.env.DATABASE_URL,
+    });
+    // Mount auth routes now that auth is ready
+    app.all('/api/auth/{*splat}', toNodeHandler(auth));
+    app.options('/.well-known/oauth-authorization-server', cors());
+    app.get(
+      '/.well-known/oauth-authorization-server',
+      cors(),
+      toNodeHandler(oAuthDiscoveryMetadata(auth)),
+    );
+    app.options('/.well-known/oauth-protected-resource/mcp', cors());
+    app.get(
+      '/.well-known/oauth-protected-resource/mcp',
+      cors(),
+      toNodeHandler(oAuthProtectedResourceMetadata(auth)),
+    );
+    logger.info({ baseURL: BASE_URL }, 'OAuth enabled with Google');
+  }
+
+  await initializePlugins();
+}
+
+start()
   .then(() => {
     app.listen(PORT, () => {
       logger.info(
