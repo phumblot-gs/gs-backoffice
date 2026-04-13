@@ -65,6 +65,7 @@ const auth = oauthEnabled
       googleClientId: GOOGLE_CLIENT_ID,
       googleClientSecret: GOOGLE_CLIENT_SECRET,
       allowedDomain: ALLOWED_DOMAIN,
+      databaseUrl: process.env.HENRI_AUTH_DATABASE_URL ?? process.env.DATABASE_URL,
     })
   : null;
 
