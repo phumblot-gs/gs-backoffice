@@ -228,6 +228,10 @@ resource "aws_ecs_task_definition" "mcp" {
         name      = "JUMPCLOUD_ORG_ID"
         valueFrom = "${var.app_secrets_arn}:JUMPCLOUD_ORG_ID::"
       },
+      {
+        name      = "NOTION_API_TOKEN"
+        valueFrom = "${var.app_secrets_arn}:NOTION_API_TOKEN::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"

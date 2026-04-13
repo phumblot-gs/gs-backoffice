@@ -17,6 +17,7 @@
     "@gs-backoffice/evt-client": "workspace:*",
     "@gs-backoffice/jumpcloud-client": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@notionhq/client": "^2.3.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "pino": "^9.6.0",

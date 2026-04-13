@@ -14,4 +14,12 @@ export {
   type EvtQueryResult,
   type BackofficeEventType,
 } from './events.js';
-export { type RBACConfig, type RBACGroupConfig, type DataSourcePermissions } from './rbac.js';
+export {
+  RBACConfigSchema,
+  RBACGroupConfigSchema,
+  ServicePermissionSchema,
+  resolvePermissions,
+  type RBACConfig,
+  type RBACGroupConfig,
+  type ServicePermission,
+} from './rbac.js';
