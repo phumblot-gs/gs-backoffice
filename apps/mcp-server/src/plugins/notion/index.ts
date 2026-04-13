@@ -11,6 +11,12 @@ import type {
 
 const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID ?? '340582cb2b9c80e9b9b0e164257fc7db';
 
+interface DocPage {
+  id: string;
+  title: string;
+  section: string;
+}
+
 export class NotionPlugin implements ServicePlugin {
   readonly name = 'notion';
   readonly description = 'Search and read GRAFMAKER process documentation from Notion';
@@ -69,25 +75,70 @@ export class NotionPlugin implements ServicePlugin {
     };
   }
 
+  /**
+   * Collect all doc pages under the root page (2 levels: sections → pages).
+   */
+  private async collectDocPages(): Promise<DocPage[]> {
+    const pages: DocPage[] = [];
+    const sections = await this.client.blocks.children.list({
+      block_id: ROOT_PAGE_ID,
+      page_size: 100,
+    });
+
+    for (const block of sections.results) {
+      if (!('type' in block) || block.type !== 'child_page') continue;
+      const sectionTitle = 'child_page' in block ? block.child_page.title : 'Untitled';
+
+      // The section itself is a page
+      pages.push({ id: block.id, title: sectionTitle, section: sectionTitle });
+
+      // Get sub-pages within this section
+      const subPages = await this.client.blocks.children.list({
+        block_id: block.id,
+        page_size: 50,
+      });
+
+      for (const sub of subPages.results) {
+        if (!('type' in sub) || sub.type !== 'child_page') continue;
+        const subTitle = 'child_page' in sub ? sub.child_page.title : 'Untitled';
+        pages.push({ id: sub.id, title: subTitle, section: sectionTitle });
+      }
+    }
+
+    return pages;
+  }
+
+  /**
+   * Simple keyword matching: check if any word from the query appears in the title.
+   */
+  private matchesQuery(title: string, question: string): boolean {
+    const titleLower = title.toLowerCase();
+    const words = question
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    return words.some((word) => titleLower.includes(word));
+  }
+
   private async executeAsk(
     input: { question: string },
     _context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const results = await this.client.search({
-        query: input.question,
-        filter: { property: 'object', value: 'page' },
-        page_size: 5,
-      });
+      const allPages = await this.collectDocPages();
 
-      const pages = results.results.filter((r) => r.object === 'page' && 'properties' in r);
+      // Find pages matching the question by title
+      const matching = allPages.filter((p) => this.matchesQuery(p.title, input.question));
 
-      if (pages.length === 0) {
+      // If no title match, return all pages as context (the doc set is small)
+      const pagesToRead = matching.length > 0 ? matching.slice(0, 5) : allPages.slice(0, 10);
+
+      if (pagesToRead.length === 0) {
         return {
           content: [
             {
               type: 'text',
-              text: `No documentation found for "${input.question}". The process might not be documented yet. You can ask the Methods Officer to create it.`,
+              text: 'No process documentation found. The "Official process" page may not have sub-pages yet.',
             },
           ],
         };
@@ -95,15 +146,14 @@ export class NotionPlugin implements ServicePlugin {
 
       const contents: string[] = [];
 
-      for (const page of pages.slice(0, 3)) {
-        const title = this.extractPageTitle(page);
+      for (const page of pagesToRead) {
         const blocks = await this.client.blocks.children.list({
           block_id: page.id,
-          page_size: 50,
+          page_size: 100,
         });
         const text = this.blocksToText(blocks.results);
         if (text.trim()) {
-          contents.push(`## ${title}\n\n${text}`);
+          contents.push(`## ${page.title} (${page.section})\n\n${text}`);
         }
       }
 
@@ -112,17 +162,22 @@ export class NotionPlugin implements ServicePlugin {
           content: [
             {
               type: 'text',
-              text: `Found pages matching "${input.question}" but they are empty. The Methods Officer may need to complete the documentation.`,
+              text: `Found ${pagesToRead.length} pages but they are all empty. The Methods Officer may need to complete the documentation.`,
             },
           ],
         };
       }
 
+      const prefix =
+        matching.length > 0
+          ? `Found ${matching.length} relevant page(s)`
+          : 'No exact match found — here is all available documentation';
+
       return {
         content: [
           {
             type: 'text',
-            text: `Here is the relevant documentation for "${input.question}":\n\n${contents.join('\n\n---\n\n')}`,
+            text: `${prefix} for "${input.question}":\n\n${contents.join('\n\n---\n\n')}`,
           },
         ],
       };
@@ -145,51 +200,33 @@ export class NotionPlugin implements ServicePlugin {
     _context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const children = await this.client.blocks.children.list({
-        block_id: ROOT_PAGE_ID,
-        page_size: 100,
-      });
+      const allPages = await this.collectDocPages();
 
-      const sections: Array<{ title: string; children: string[] }> = [];
+      // Group by section
+      const sectionMap = new Map<string, string[]>();
+      for (const page of allPages) {
+        if (page.title === page.section) continue; // Skip section root pages
+        if (input.section && page.section.toLowerCase() !== input.section.toLowerCase()) continue;
 
-      for (const block of children.results) {
-        if (!('type' in block) || block.type !== 'child_page') continue;
-        const sectionTitle = 'child_page' in block ? block.child_page.title : 'Untitled';
-
-        if (input.section && sectionTitle.toLowerCase() !== input.section.toLowerCase()) {
-          continue;
-        }
-
-        const subPages = await this.client.blocks.children.list({
-          block_id: block.id,
-          page_size: 50,
-        });
-
-        const pageNames = subPages.results
-          .filter((b) => 'type' in b && b.type === 'child_page')
-          .map((b) => ('child_page' in b ? b.child_page.title : 'Untitled'));
-
-        sections.push({ title: sectionTitle, children: pageNames });
+        if (!sectionMap.has(page.section)) sectionMap.set(page.section, []);
+        sectionMap.get(page.section)!.push(page.title);
       }
 
-      if (sections.length === 0) {
+      if (sectionMap.size === 0) {
         return {
           content: [
             {
               type: 'text',
               text: input.section
                 ? `No documentation found for section "${input.section}".`
-                : 'No process documentation found. The documentation structure may not be set up yet.',
+                : 'No process documentation found yet.',
             },
           ],
         };
       }
 
-      const text = sections
-        .map(
-          (s) =>
-            `### ${s.title}\n${s.children.length > 0 ? s.children.map((c) => `- ${c}`).join('\n') : '_(empty section)_'}`,
-        )
+      const text = [...sectionMap.entries()]
+        .map(([section, pages]) => `### ${section}\n${pages.map((p) => `- ${p}`).join('\n')}`)
         .join('\n\n');
 
       return {
@@ -212,16 +249,6 @@ export class NotionPlugin implements ServicePlugin {
         isError: true,
       };
     }
-  }
-
-  private extractPageTitle(page: Record<string, unknown>): string {
-    const props = page.properties as Record<string, unknown> | undefined;
-    if (!props) return 'Untitled';
-    const titleProp = props.title ?? props.Name ?? props.name;
-    if (!titleProp || typeof titleProp !== 'object') return 'Untitled';
-    const titleArr = (titleProp as Record<string, unknown>).title;
-    if (!Array.isArray(titleArr) || titleArr.length === 0) return 'Untitled';
-    return titleArr.map((t: Record<string, unknown>) => t.plain_text ?? '').join('');
   }
 
   private blocksToText(blocks: Array<Record<string, unknown>>): string {
