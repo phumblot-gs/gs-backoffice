@@ -21,7 +21,11 @@ export function createHenriAuth(config: OAuthConfig): any {
   let database: Parameters<typeof betterAuth>[0]['database'];
 
   if (config.databaseUrl) {
-    const pool = new Pool({ connectionString: config.databaseUrl });
+    let connString = config.databaseUrl;
+    if (connString.includes('rds.amazonaws.com') && !connString.includes('sslmode')) {
+      connString += connString.includes('?') ? '&sslmode=require' : '?sslmode=require';
+    }
+    const pool = new Pool({ connectionString: connString });
     database = pool;
     logger.info('OAuth using PostgreSQL for sessions');
   } else {
