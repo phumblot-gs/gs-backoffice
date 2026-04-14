@@ -10,6 +10,8 @@ import type {
 } from '../types.js';
 
 const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID ?? '340582cb2b9c80e9b9b0e164257fc7db';
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CONTENT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 interface DocPage {
   id: string;
@@ -25,6 +27,13 @@ export class NotionPlugin implements ServicePlugin {
   private client!: Client;
   private logger!: Logger;
 
+  // Cache for page tree
+  private cachedPages: DocPage[] = [];
+  private cacheTimestamp = 0;
+
+  // Cache for page content
+  private contentCache = new Map<string, { text: string; timestamp: number }>();
+
   async initialize(config: PluginInitConfig): Promise<void> {
     this.logger = config.logger;
     const token = config.credentials.NOTION_API_TOKEN;
@@ -32,6 +41,14 @@ export class NotionPlugin implements ServicePlugin {
       this.logger.warn('NOTION_API_TOKEN not set — Notion plugin will return errors');
     }
     this.client = new Client({ auth: token || undefined });
+
+    // Pre-warm cache at startup
+    try {
+      await this.getDocPages();
+      this.logger.info({ pages: this.cachedPages.length }, 'Notion page cache warmed');
+    } catch {
+      this.logger.warn('Failed to pre-warm Notion cache');
+    }
   }
 
   getTools(): PluginTool[] {
@@ -76,28 +93,35 @@ export class NotionPlugin implements ServicePlugin {
   }
 
   /**
-   * Collect all doc pages under the root page (2 levels: sections → pages).
+   * Get doc pages with caching (TTL 5 min).
    */
-  private async collectDocPages(): Promise<DocPage[]> {
+  private async getDocPages(): Promise<DocPage[]> {
+    if (this.cachedPages.length > 0 && Date.now() - this.cacheTimestamp < CACHE_TTL_MS) {
+      return this.cachedPages;
+    }
+
     const pages: DocPage[] = [];
     const sections = await this.client.blocks.children.list({
       block_id: ROOT_PAGE_ID,
       page_size: 100,
     });
 
-    for (const block of sections.results) {
-      if (!('type' in block) || block.type !== 'child_page') continue;
-      const sectionTitle = 'child_page' in block ? block.child_page.title : 'Untitled';
+    const sectionBlocks = sections.results.filter((b) => 'type' in b && b.type === 'child_page');
 
-      // The section itself is a page
+    // Fetch all section children in parallel
+    const sectionResults = await Promise.all(
+      sectionBlocks.map(async (block) => {
+        const sectionTitle = 'child_page' in block ? block.child_page.title : 'Untitled';
+        const subPages = await this.client.blocks.children.list({
+          block_id: block.id,
+          page_size: 50,
+        });
+        return { block, sectionTitle, subPages };
+      }),
+    );
+
+    for (const { block, sectionTitle, subPages } of sectionResults) {
       pages.push({ id: block.id, title: sectionTitle, section: sectionTitle });
-
-      // Get sub-pages within this section
-      const subPages = await this.client.blocks.children.list({
-        block_id: block.id,
-        page_size: 50,
-      });
-
       for (const sub of subPages.results) {
         if (!('type' in sub) || sub.type !== 'child_page') continue;
         const subTitle = 'child_page' in sub ? sub.child_page.title : 'Untitled';
@@ -105,12 +129,29 @@ export class NotionPlugin implements ServicePlugin {
       }
     }
 
+    this.cachedPages = pages;
+    this.cacheTimestamp = Date.now();
     return pages;
   }
 
   /**
-   * Simple keyword matching: check if any word from the query appears in the title.
+   * Get page content with caching (TTL 10 min).
    */
+  private async getPageContent(pageId: string): Promise<string> {
+    const cached = this.contentCache.get(pageId);
+    if (cached && Date.now() - cached.timestamp < CONTENT_CACHE_TTL_MS) {
+      return cached.text;
+    }
+
+    const blocks = await this.client.blocks.children.list({
+      block_id: pageId,
+      page_size: 100,
+    });
+    const text = this.blocksToText(blocks.results);
+    this.contentCache.set(pageId, { text, timestamp: Date.now() });
+    return text;
+  }
+
   private matchesQuery(title: string, question: string): boolean {
     const titleLower = title.toLowerCase();
     const words = question
@@ -125,12 +166,8 @@ export class NotionPlugin implements ServicePlugin {
     _context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const allPages = await this.collectDocPages();
-
-      // Find pages matching the question by title
+      const allPages = await this.getDocPages();
       const matching = allPages.filter((p) => this.matchesQuery(p.title, input.question));
-
-      // If no title match, return all pages as context (the doc set is small)
       const pagesToRead = matching.length > 0 ? matching.slice(0, 5) : allPages.slice(0, 10);
 
       if (pagesToRead.length === 0) {
@@ -144,18 +181,17 @@ export class NotionPlugin implements ServicePlugin {
         };
       }
 
-      const contents: string[] = [];
+      // Read page contents in parallel
+      const contentResults = await Promise.all(
+        pagesToRead.map(async (page) => ({
+          page,
+          text: await this.getPageContent(page.id),
+        })),
+      );
 
-      for (const page of pagesToRead) {
-        const blocks = await this.client.blocks.children.list({
-          block_id: page.id,
-          page_size: 100,
-        });
-        const text = this.blocksToText(blocks.results);
-        if (text.trim()) {
-          contents.push(`## ${page.title} (${page.section})\n\n${text}`);
-        }
-      }
+      const contents = contentResults
+        .filter((r) => r.text.trim())
+        .map((r) => `## ${r.page.title} (${r.page.section})\n\n${r.text}`);
 
       if (contents.length === 0) {
         return {
@@ -200,14 +236,12 @@ export class NotionPlugin implements ServicePlugin {
     _context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const allPages = await this.collectDocPages();
-
-      // Group by section
+      const allPages = await this.getDocPages();
       const sectionMap = new Map<string, string[]>();
-      for (const page of allPages) {
-        if (page.title === page.section) continue; // Skip section root pages
-        if (input.section && page.section.toLowerCase() !== input.section.toLowerCase()) continue;
 
+      for (const page of allPages) {
+        if (page.title === page.section) continue;
+        if (input.section && page.section.toLowerCase() !== input.section.toLowerCase()) continue;
         if (!sectionMap.has(page.section)) sectionMap.set(page.section, []);
         sectionMap.get(page.section)!.push(page.title);
       }
@@ -230,12 +264,7 @@ export class NotionPlugin implements ServicePlugin {
         .join('\n\n');
 
       return {
-        content: [
-          {
-            type: 'text',
-            text: `## Available Process Documentation\n\n${text}`,
-          },
-        ],
+        content: [{ type: 'text', text: `## Available Process Documentation\n\n${text}` }],
       };
     } catch (err) {
       this.logger.error({ error: err }, 'Notion list pages failed');
