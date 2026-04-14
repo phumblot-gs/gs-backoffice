@@ -15,24 +15,31 @@ export class RBACResolver {
   }
 
   async resolve(userId: string, userEmail: string): Promise<ToolContext> {
-    // Dev mode: grant all permissions
     if (userId === 'dev-user' || !this.jumpcloud) {
       logger.warn({ userId, userEmail }, 'Dev mode — granting all permissions');
-      return {
-        userId,
-        userEmail,
-        groups: ['*'],
-        permissions: ['*'],
-      };
+      return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
     }
 
     try {
-      const userGroups = await this.jumpcloud.getUserGroups(userId);
-      const groupNames = userGroups.map((g) => g.name);
+      // Look up user by email in JumpCloud (Google email may differ from JumpCloud email)
+      const result = await this.jumpcloud.getUserGroupsByEmail(userEmail);
+
+      if (!result) {
+        logger.warn({ userEmail }, 'User not found in JumpCloud — granting all permissions');
+        return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
+      }
+
+      const groupNames = result.groups.map((g) => g.name);
       const resolved = resolvePermissions(this.rbacConfig, groupNames);
 
       logger.info(
-        { userId, userEmail, groups: groupNames, permissions: resolved.permissions },
+        {
+          userId,
+          userEmail,
+          jcUser: result.user.username,
+          groups: groupNames,
+          permissions: resolved.permissions,
+        },
         'RBAC resolved',
       );
 
@@ -41,18 +48,14 @@ export class RBACResolver {
         userEmail,
         groups: groupNames,
         permissions: resolved.permissions,
+        scopes: resolved.scopes,
       };
     } catch (err) {
       logger.warn(
         { userId, userEmail, error: err },
         'JumpCloud lookup failed — granting all permissions as fallback',
       );
-      return {
-        userId,
-        userEmail,
-        groups: ['*'],
-        permissions: ['*'],
-      };
+      return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
     }
   }
 }

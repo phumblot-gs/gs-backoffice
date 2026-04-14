@@ -17,6 +17,7 @@ export interface ToolContext {
   userEmail: string;
   groups: string[];
   permissions: string[];
+  scopes: Record<string, string[]>;
 }
 
 // --- Plugin tool definition ---

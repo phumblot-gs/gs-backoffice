@@ -152,6 +152,21 @@ export class NotionPlugin implements ServicePlugin {
     return text;
   }
 
+  /**
+   * Filter pages by RBAC scopes for the 'notion' service.
+   * Scopes match against section names (e.g., "Comptabilité - Finance", "Engineering").
+   */
+  private filterByScopes(pages: DocPage[], context: ToolContext): DocPage[] {
+    const notionScopes = context.scopes['notion'] ?? context.scopes['*'];
+    if (!notionScopes || notionScopes.includes('*')) return pages;
+
+    const allowed = new Set(notionScopes.map((s) => s.toLowerCase()));
+    return pages.filter((p) => {
+      const sectionLower = p.section.toLowerCase();
+      return allowed.has(sectionLower) || [...allowed].some((s) => sectionLower.includes(s));
+    });
+  }
+
   private matchesQuery(title: string, question: string): boolean {
     const titleLower = title.toLowerCase();
     const words = question
@@ -163,10 +178,10 @@ export class NotionPlugin implements ServicePlugin {
 
   private async executeAsk(
     input: { question: string },
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const allPages = await this.getDocPages();
+      const allPages = this.filterByScopes(await this.getDocPages(), context);
       const matching = allPages.filter((p) => this.matchesQuery(p.title, input.question));
       const pagesToRead = matching.length > 0 ? matching.slice(0, 5) : allPages.slice(0, 10);
 
@@ -233,10 +248,10 @@ export class NotionPlugin implements ServicePlugin {
 
   private async executeSearchDocs(
     input: { section?: string },
-    _context: ToolContext,
+    context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const allPages = await this.getDocPages();
+      const allPages = this.filterByScopes(await this.getDocPages(), context);
       const sectionMap = new Map<string, string[]>();
 
       for (const page of allPages) {

@@ -206,6 +206,7 @@ app.post('/mcp', async (req: Request, res: Response) => {
           userEmail: 'dev@grand-shooting.com',
           groups: ['*'],
           permissions: ['*'],
+          scopes: { '*': ['*'] },
         },
       );
       await server.connect(transport);
