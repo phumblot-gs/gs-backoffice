@@ -110,12 +110,7 @@ CONF
 # Override DATABASE_URL in the process env so the server sees the SSL version
 export DATABASE_URL="$PAPERCLIP_DATABASE_URL"
 
-# Apply pending DB schema migrations non-interactively before starting the server.
-# Required on version upgrades: `run --no-repair` will refuse to start with pending
-# migrations, so we reconcile/apply them here first. Idempotent (no-op when up to date).
-# `set -e` makes a failed migration abort the container so a bad deploy fails loudly.
-echo "Running Paperclip doctor to apply pending migrations…"
-paperclipai doctor --repair --yes -c "$CONFIG_FILE"
-
 echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, allowedHostnames=[${ALLOWED_JSON}])"
+# `paperclipai run` applies pending forward DB migrations on startup (this is how the
+# initial schema was created). --no-repair only skips interactive history reconciliation.
 exec paperclipai run --no-repair
