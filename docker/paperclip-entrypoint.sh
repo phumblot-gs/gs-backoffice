@@ -80,7 +80,7 @@ cat > "$CONFIG_FILE" <<CONF
   "auth": {
     "baseUrlMode": "explicit",
     "publicBaseUrl": "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}",
-    "disableSignUp": ${PAPERCLIP_DISABLE_SIGNUP:-true}
+    "disableSignUp": ${PAPERCLIP_DISABLE_SIGNUP:-false}
   },
   "telemetry": {
     "enabled": false
