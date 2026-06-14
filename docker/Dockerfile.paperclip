@@ -6,7 +6,7 @@ RUN apt-get update \
 
 FROM base AS production
 WORKDIR /app
-RUN npm install --global paperclipai@latest @anthropic-ai/claude-code@latest
+RUN npm install --global paperclipai@2026.609.0 @anthropic-ai/claude-code@latest
 RUN mkdir -p /paperclip && chown node:node /paperclip
 COPY --chown=node:node docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

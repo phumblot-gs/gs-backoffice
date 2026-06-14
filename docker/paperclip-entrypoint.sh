@@ -80,7 +80,7 @@ cat > "$CONFIG_FILE" <<CONF
   "auth": {
     "baseUrlMode": "explicit",
     "publicBaseUrl": "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}",
-    "disableSignUp": false
+    "disableSignUp": ${PAPERCLIP_DISABLE_SIGNUP:-false}
   },
   "telemetry": {
     "enabled": false
@@ -111,4 +111,6 @@ CONF
 export DATABASE_URL="$PAPERCLIP_DATABASE_URL"
 
 echo "Starting Paperclip (DATABASE_URL=${DATABASE_URL:+set}, allowedHostnames=[${ALLOWED_JSON}])"
+# `paperclipai run` applies pending forward DB migrations on startup (this is how the
+# initial schema was created). --no-repair only skips interactive history reconciliation.
 exec paperclipai run --no-repair
