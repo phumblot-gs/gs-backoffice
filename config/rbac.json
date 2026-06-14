@@ -1,6 +1,6 @@
 {
   "groups": {
-    "Direction": {
+    "Management Team": {
       "services": {
         "notion": { "actions": ["read"], "scopes": ["*"] },
         "paperclip": {
@@ -10,19 +10,12 @@
       },
       "workflows": ["*"]
     },
-    "Finance": {
+    "Sales": {
       "services": {
-        "notion": { "actions": ["read"], "scopes": ["Finance", "Général"] },
-        "paperclip": {
-          "actions": ["read", "create_ticket"],
-          "scopes": ["finance"]
-        }
-      },
-      "workflows": ["invoice_client", "payment_followup"]
-    },
-    "Commercial": {
-      "services": {
-        "notion": { "actions": ["read"], "scopes": ["Commercial", "Général"] },
+        "notion": {
+          "actions": ["read"],
+          "scopes": ["Commercial", "Général", "Comptabilité - Finance"]
+        },
         "paperclip": {
           "actions": ["read", "create_ticket"],
           "scopes": ["sales"]
@@ -30,22 +23,48 @@
       },
       "workflows": ["register_contract", "prospect_brief"]
     },
-    "Engineering": {
+    "Customer Success": {
       "services": {
-        "notion": { "actions": ["read"], "scopes": ["Engineering", "Général"] },
+        "notion": {
+          "actions": ["read"],
+          "scopes": ["Customer Success", "Commercial", "Général"]
+        },
+        "paperclip": {
+          "actions": ["read", "create_ticket"],
+          "scopes": ["customer_success"]
+        }
+      },
+      "workflows": ["client_issue", "onboarding"]
+    },
+    "DevOps": {
+      "services": {
+        "notion": {
+          "actions": ["read"],
+          "scopes": ["Engineering", "DevOps", "Général"]
+        },
         "paperclip": { "actions": ["read"], "scopes": ["engineering"] }
       },
       "workflows": ["bug_report", "feature_request"]
     },
-    "RH": {
+    "DevProduct": {
       "services": {
-        "notion": { "actions": ["read"], "scopes": ["RH", "Général"] },
+        "notion": {
+          "actions": ["read"],
+          "scopes": ["Engineering", "Product", "Général"]
+        },
         "paperclip": {
           "actions": ["read", "create_ticket"],
-          "scopes": ["hr"]
+          "scopes": ["engineering", "product"]
         }
       },
-      "workflows": ["onboarding", "training_request"]
+      "workflows": ["bug_report", "feature_request"]
+    },
+    "All Users": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["Général"] },
+        "paperclip": { "actions": ["read"], "scopes": ["general"] }
+      },
+      "workflows": []
     }
   }
 }
