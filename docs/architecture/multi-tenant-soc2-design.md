@@ -20,7 +20,7 @@ SOC 2 TSC = **Security + Confidentiality** · GRC platform = **Comp AI** (open s
 - **Paperclip**: single instance, **company-scoped API** (`/companies/{id}/...`), rich native APIs for companies, members, agents, **routines**, access/permissions, invites, instance admin; full **OpenAPI** spec via `paperclipai openapi`.
 - **Change management**: PR → CI (install/build/typecheck/test/lint) → merge → push `staging`/`production` → Terraform/ECS. IaC in `infrastructure/terraform`.
 
-**Known gaps closed recently**: fail-open RBAC; open public signup; hostile accounts/companies; broken JumpCloud group parsing. These are exactly the class of findings a SOC 2 audit raises — they are now fixed, but must be backed by *systematic controls + evidence*, not ad-hoc fixes.
+**Known gaps closed recently**: fail-open RBAC; open public signup; hostile accounts/companies; broken JumpCloud group parsing. These are exactly the class of findings a SOC 2 audit raises — they are now fixed, but must be backed by _systematic controls + evidence_, not ad-hoc fixes.
 
 ---
 
@@ -32,43 +32,46 @@ SOC 2 TSC = **Security + Confidentiality** · GRC platform = **Comp AI** (open s
 
 Two distinct layers — do not conflate them:
 
-| Layer | What | Where it lives |
-|---|---|---|
+| Layer                                      | What                                                                      | Where it lives                                                                      |
+| ------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **A. Employee access (via MCP/Claude.ai)** | `(company, group) → scopes` + **expert-agent access** + allowed workflows | **Version-controlled config (`config/rbac.json`), source of truth, changed via PR** |
-| **B. Agent internal capabilities** | what an expert agent may *do* once invoked (skills, permissions) | **Paperclip-native** (`agent permissions:update`, `principal_permission_grants`) |
+| **B. Agent internal capabilities**         | what an expert agent may _do_ once invoked (skills, permissions)          | **Paperclip-native** (`agent permissions:update`, `principal_permission_grants`)    |
 
 This question (employee rights on companies + expert-agent access) is **Layer A**.
 
 **Why git config (not a Notion DB / free-form UI) as source of truth** — this is itself a SOC 2 control:
+
 - **Change management (CC8)**: every rights change = a PR → independent review (**segregation of duties**) → CI → merge. Exactly what the auditor wants.
 - **Immutable audit trail**: `git log` proves who changed which right, when, approved by whom — free evidence.
 - **Validation**: Zod schema + CI check rejects malformed / over-permissive matrices before deploy.
 - Loaded by the MCP at startup, deployed with the image (reproducible).
-- *Optional later*: a Notion DB / admin UI as a **proposal** layer that opens a PR (never auto-applies), preserving non-technical editing **and** SOC 2 change control.
+- _Optional later_: a Notion DB / admin UI as a **proposal** layer that opens a PR (never auto-applies), preserving non-technical editing **and** SOC 2 change control.
 
 ### Form — per-company RBAC, validated by Zod
 
 ```jsonc
 {
   "companies": {
-    "8eac2097-…": {                              // Paperclip companyId (or slug)
+    "8eac2097-…": {
+      // Paperclip companyId (or slug)
       "name": "GRAFMAKER",
       "groups": {
         "Sales": {
           "services": {
-            "notion":    { "actions": ["read"], "scopes": ["Sales", "General"] },
-            "paperclip": { "actions": ["read", "create_ticket"], "scopes": ["sales"] }
+            "notion": { "actions": ["read"], "scopes": ["Sales", "General"] },
+            "paperclip": { "actions": ["read", "create_ticket"], "scopes": ["sales"] },
           },
-          "agents":    ["sales-expert", "pricing-advisor"],   // expert-agent access (by shortname)
-          "workflows": ["register_contract"]                   // allowed routines (Capability B)
+          "agents": ["sales-expert", "pricing-advisor"], // expert-agent access (by shortname)
+          "workflows": ["register_contract"], // allowed routines (Capability B)
         },
         "General": {
           "services": { "notion": { "actions": ["read"], "scopes": ["General"] } },
-          "agents": [], "workflows": []
-        }
-      }
-    }
-  }
+          "agents": [],
+          "workflows": [],
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -78,6 +81,7 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 - **Tenant isolation** (internal ⇒ row-scoping by `company_id`): all reads/writes filtered by the resolved company set. **No cross-company leakage** even though the board API key can see everything — the MCP enforces the boundary.
 
 ### SOC 2 controls + evidence (CC6 Logical Access / Confidentiality)
+
 - Least privilege, deny-by-default (already fail-closed). Access matrix is **version-controlled** (`rbac.json` in git → reviewable change history).
 - **Cross-tenant isolation tests** in CI (automated negative tests: user of company A cannot read company B's data) — primary evidence for confidentiality.
 - Quarterly **access review**: export `(user → groups → company access)` for sign-off (feeds Comp AI).
@@ -90,6 +94,7 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 **Goal**: a company declares official processes, directly triggerable from the MCP, validated and traced.
 
 ### Design — back it by Paperclip **routines** (native)
+
 - Each official process = a **Paperclip routine** (`routine create`), per company, with: name, description, parameter contract, target agent, and a **required RBAC scope/permission**.
 - MCP exposes:
   - `henri_list_workflows` → lists routines available for the user's **company + scope** (filtered; unauthorized ones hidden).
@@ -98,6 +103,7 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 - **Human-in-the-loop**: sensitive processes (invoice, contract, payment) create an **approval-gated** ticket (Paperclip `approval` ops) — never auto-execute. Processing Integrity control.
 
 ### SOC 2 controls + evidence
+
 - **Full traceability**: who triggered which process, when, with which parameters, and the outcome (EVT audit event + Paperclip routine run record). Immutable log.
 - **Authorization enforced** per process (not free-text). Catalog is change-managed (routine revisions are versioned natively).
 
@@ -105,15 +111,17 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 
 ## 4. Capability C — Expert agents with authorized chat (Q3)
 
-**Goal**: per-company "expert" agents available to *specific* members, chat-style, **access explicitly authorized**.
+**Goal**: per-company "expert" agents available to _specific_ members, chat-style, **access explicitly authorized**.
 
 ### Design
+
 - Expert agents = **Paperclip agents** (`agent create`) configured with domain **skills** (`skills:sync`), **instructions/knowledge** (`instructions-*`), and least-privilege **agent permissions** (`permissions:update`).
 - **Authorization** via the per-company RBAC: add an `agents` grant to a group (the original CLAUDE.md RBAC already anticipated `agents: string[]`). Only authorized members see/use a given expert.
 - **MCP exposes a chat tool only for authorized agents** — e.g. `henri_ask_expert(agentId, message)` whose agent list is restricted to the user's grants (unauthorized agents are not exposed, same fail-closed pattern as other tools).
-- **Interaction model (async)**: Paperclip agents are task/heartbeat-driven; there is no synchronous chat endpoint. A "chat" = relay the member's message via `agent prompt`/`wake`, then read the agent's reply from the task session / issue thread. UX is near-real-time (wake) or short async round-trip. *(If true synchronous chat is required, that is a larger build — flag for decision.)*
+- **Interaction model (async)**: Paperclip agents are task/heartbeat-driven; there is no synchronous chat endpoint. A "chat" = relay the member's message via `agent prompt`/`wake`, then read the agent's reply from the task session / issue thread. UX is near-real-time (wake) or short async round-trip. _(If true synchronous chat is required, that is a larger build — flag for decision.)_
 
 ### SOC 2 controls + evidence
+
 - Explicit per-agent authorization = least privilege (CC6).
 - **Every member↔agent interaction logged** (EVT + Paperclip task sessions) — who talked to which expert, when, content reference. Confidentiality + monitoring.
 - **LLM data handling**: messages to expert agents go to the Anthropic API → ensure **DPA + zero-retention** with Anthropic (Confidentiality). Agent knowledge scoped per company (no cross-company knowledge bleed).
@@ -122,17 +130,18 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 
 ## 5. Cross-cutting SOC 2 controls (Security + Confidentiality)
 
-| Control area | Implementation | Evidence (for Comp AI) |
-|---|---|---|
-| Logical access (CC6) | JumpCloud SSO + fail-closed RBAC + per-company least privilege | `rbac.json` history, access reviews, JumpCloud group exports |
-| Audit logging (CC7) | EVT audit events on every tool call + agent interaction + routine run; CloudWatch; Sentry | Log retention over the observation window, immutability |
-| Change management (CC8) | PR + CI gates + IaC; **segregation of duties** (author ≠ approver) + prod approval gate **to formalize** | PR reviews, CI runs, deploy approvals |
-| Confidentiality | Tenant row-scoping + isolation tests; Notion/Paperclip scope filtering; data classification | Cross-tenant negative tests, scope config |
-| Encryption | TLS in transit (`sslmode=require`); **verify RDS encryption-at-rest enabled**; secrets in AWS Secrets Manager | RDS config, KMS, secrets policy |
-| Vendor mgmt | Sub-processor register: AWS, Anthropic, Notion, JumpCloud, HubSpot, Hyperline, Pennylane, Comp AI | Their SOC 2 reports + DPAs |
-| AI-specific | Human-in-the-loop on sensitive actions; Anthropic DPA + zero-retention; Methods Officer self-modification gated by enforced CEO approval | Approval records, Anthropic terms |
+| Control area            | Implementation                                                                                                                           | Evidence (for Comp AI)                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Logical access (CC6)    | JumpCloud SSO + fail-closed RBAC + per-company least privilege                                                                           | `rbac.json` history, access reviews, JumpCloud group exports |
+| Audit logging (CC7)     | EVT audit events on every tool call + agent interaction + routine run; CloudWatch; Sentry                                                | Log retention over the observation window, immutability      |
+| Change management (CC8) | PR + CI gates + IaC; **segregation of duties** (author ≠ approver) + prod approval gate **to formalize**                                 | PR reviews, CI runs, deploy approvals                        |
+| Confidentiality         | Tenant row-scoping + isolation tests; Notion/Paperclip scope filtering; data classification                                              | Cross-tenant negative tests, scope config                    |
+| Encryption              | TLS in transit (`sslmode=require`); **verify RDS encryption-at-rest enabled**; secrets in AWS Secrets Manager                            | RDS config, KMS, secrets policy                              |
+| Vendor mgmt             | Sub-processor register: AWS, Anthropic, Notion, JumpCloud, HubSpot, Hyperline, Pennylane, Comp AI                                        | Their SOC 2 reports + DPAs                                   |
+| AI-specific             | Human-in-the-loop on sensitive actions; Anthropic DPA + zero-retention; Methods Officer self-modification gated by enforced CEO approval | Approval records, Anthropic terms                            |
 
 ### ⚠️ Items to formalize for the audit
+
 1. **Segregation of duties** in change management: currently PRs are self-merged. SOC 2 wants independent review + an enforced **production approval gate**.
 2. **RDS encryption-at-rest** — verify it is enabled (likely, but must be evidenced).
 3. **Anthropic DPA + zero data retention** — confirm contractual terms.
@@ -152,6 +161,7 @@ Each phase ships via the standard PR → CI → staging → production flow, wit
 ---
 
 ## 7. Open decisions for the CEO
+
 - **Ticket scope source** (carried over): derive a ticket's scope from the **requester's department** vs the **workflow type**. Recommendation: requester now, workflow type once routines exist.
 - **Expert chat UX**: accept **async** (recommended, native) vs invest in a synchronous experience (larger build).
 - **Comp AI hosting**: managed (simpler, GRC tool not self-operated) vs self-hosted (free, but in-scope to secure).
