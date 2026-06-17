@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePermissions, RBACConfigSchema } from './rbac.js';
-import type { RBACConfig } from './rbac.js';
+import {
+  resolvePermissions,
+  resolveCompanyAccess,
+  resolveAccessibleCompanies,
+  RBACConfigSchema,
+  PerCompanyRBACConfigSchema,
+} from './rbac.js';
+import type { RBACConfig, PerCompanyRBACConfig } from './rbac.js';
 
 const config: RBACConfig = {
   groups: {
@@ -10,6 +16,7 @@ const config: RBACConfig = {
         hyperline: { actions: ['read', 'create_invoice'], scopes: ['billing'] },
         paperclip: { actions: ['read', 'create_ticket'], scopes: ['finance'] },
       },
+      agents: ['finance-expert'],
       workflows: ['invoice_client', 'payment_followup'],
     },
     Engineering: {
@@ -87,5 +94,98 @@ describe('resolvePermissions', () => {
     const result = resolvePermissions(config, ['Finance', 'Engineering']);
     const notionReadCount = result.permissions.filter((p) => p === 'notion.read').length;
     expect(notionReadCount).toBe(1);
+  });
+
+  it('resolves expert-agent grants (defaulting to empty)', () => {
+    expect(resolvePermissions(config, ['Finance']).agents).toContain('finance-expert');
+    expect(resolvePermissions(config, ['Engineering']).agents).toHaveLength(0);
+  });
+});
+
+const perCompany: PerCompanyRBACConfig = {
+  companies: {
+    acme: {
+      name: 'Acme',
+      groups: {
+        Sales: {
+          services: { paperclip: { actions: ['read', 'create_ticket'], scopes: ['sales'] } },
+          agents: ['sales-expert'],
+          workflows: ['register_contract'],
+        },
+        General: {
+          services: { notion: { actions: ['read'], scopes: ['General'] } },
+        },
+      },
+    },
+    globex: {
+      name: 'Globex',
+      groups: {
+        Engineering: {
+          services: { notion: { actions: ['read'], scopes: ['Engineering'] } },
+          agents: ['eng-expert'],
+        },
+      },
+    },
+  },
+};
+
+describe('PerCompanyRBACConfigSchema', () => {
+  it('validates a minimal per-company config (agents/workflows optional)', () => {
+    expect(() =>
+      PerCompanyRBACConfigSchema.parse({
+        companies: { acme: { groups: { General: { services: {} } } } },
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects an invalid company group', () => {
+    expect(() =>
+      PerCompanyRBACConfigSchema.parse({ companies: { acme: { groups: { Bad: { x: 1 } } } } }),
+    ).toThrow();
+  });
+});
+
+describe('resolveCompanyAccess', () => {
+  it('resolves access (union) for a company the user has groups in', () => {
+    const r = resolveCompanyAccess(perCompany, 'acme', ['Sales', 'General']);
+    expect(r.permissions).toContain('paperclip.create_ticket');
+    expect(r.permissions).toContain('notion.read');
+    expect(r.scopes.notion).toContain('General');
+    expect(r.scopes.paperclip).toContain('sales');
+    expect(r.agents).toContain('sales-expert');
+    expect(r.workflows).toContain('register_contract');
+  });
+
+  it('fail-closed on an unknown company', () => {
+    expect(resolveCompanyAccess(perCompany, 'unknown', ['Sales'])).toEqual({
+      permissions: [],
+      scopes: {},
+      workflows: [],
+      agents: [],
+    });
+  });
+
+  it('fail-closed when the user has no group authorized on the company', () => {
+    // "Engineering" exists only on globex, not acme.
+    expect(resolveCompanyAccess(perCompany, 'acme', ['Engineering']).permissions).toHaveLength(0);
+  });
+
+  it('does not leak access across companies', () => {
+    expect(resolveCompanyAccess(perCompany, 'acme', ['Engineering']).agents).toHaveLength(0);
+    expect(resolveCompanyAccess(perCompany, 'globex', ['Engineering']).agents).toContain(
+      'eng-expert',
+    );
+  });
+});
+
+describe('resolveAccessibleCompanies', () => {
+  it('lists only companies where the user has a matching group', () => {
+    expect(resolveAccessibleCompanies(perCompany, ['Sales']).sort()).toEqual(['acme']);
+    expect(resolveAccessibleCompanies(perCompany, ['Engineering']).sort()).toEqual(['globex']);
+    expect(resolveAccessibleCompanies(perCompany, ['General', 'Engineering']).sort()).toEqual([
+      'acme',
+      'globex',
+    ]);
+    expect(resolveAccessibleCompanies(perCompany, ['Nope'])).toEqual([]);
   });
 });
