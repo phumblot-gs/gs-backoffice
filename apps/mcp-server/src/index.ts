@@ -6,7 +6,7 @@ import cors from 'cors';
 import pino from 'pino';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { RBACConfigSchema } from '@gs-backoffice/core';
+import { PerCompanyRBACConfigSchema } from '@gs-backoffice/core';
 import { EvtClient } from '@gs-backoffice/evt-client';
 import { JumpCloudClient } from '@gs-backoffice/jumpcloud-client';
 import { createHenriMcpServer } from './server.js';
@@ -39,6 +39,9 @@ const BASE_URL =
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
 const ALLOWED_DOMAIN = process.env.ALLOWED_EMAIL_DOMAIN ?? 'grand-shooting.com';
+// Logical slug of the company this MCP instance serves; maps to PAPERCLIP_COMPANY_ID.
+// Keyed in config/rbac.json so the same matrix works across environments.
+const COMPANY_SLUG = process.env.PAPERCLIP_COMPANY_SLUG ?? 'grafmaker';
 
 // --- OAuth enabled? ---
 const oauthEnabled = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
@@ -48,10 +51,11 @@ function loadRBACConfig() {
   try {
     const configPath = resolve(process.cwd(), 'config', 'rbac.json');
     const raw = readFileSync(configPath, 'utf-8');
-    return RBACConfigSchema.parse(JSON.parse(raw));
+    return PerCompanyRBACConfigSchema.parse(JSON.parse(raw));
   } catch {
-    logger.warn('Could not load config/rbac.json — using empty RBAC config');
-    return { groups: {} };
+    // Fail-closed: an unreadable/invalid matrix grants nobody access.
+    logger.warn('Could not load config/rbac.json — using empty RBAC config (deny all)');
+    return { companies: {} };
   }
 }
 
@@ -79,7 +83,7 @@ const jumpcloud =
       })
     : null;
 
-const rbacResolver = new RBACResolver(jumpcloud, rbacConfig);
+const rbacResolver = new RBACResolver(jumpcloud, rbacConfig, COMPANY_SLUG);
 
 // --- Initialize Plugin Manager ---
 const pluginManager = new PluginManager({ evtClient, environment: NODE_ENV });
