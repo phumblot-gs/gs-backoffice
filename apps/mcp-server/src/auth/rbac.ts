@@ -14,6 +14,14 @@ export class RBACResolver {
     this.rbacConfig = rbacConfig;
   }
 
+  /**
+   * Fail-closed context: the user is authenticated but gets NO permissions and
+   * NO scopes, so the plugin manager exposes zero tools to them.
+   */
+  private denyAll(userId: string, userEmail: string): ToolContext {
+    return { userId, userEmail, groups: [], permissions: [], scopes: {} };
+  }
+
   async resolve(userId: string, userEmail: string): Promise<ToolContext> {
     if (userId === 'dev-user' || !this.jumpcloud) {
       logger.warn({ userId, userEmail }, 'Dev mode — granting all permissions');
@@ -25,8 +33,9 @@ export class RBACResolver {
       const result = await this.jumpcloud.getUserGroupsByEmail(userEmail);
 
       if (!result) {
-        logger.warn({ userEmail }, 'User not found in JumpCloud — granting all permissions');
-        return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
+        // Fail-closed: an authenticated user with no JumpCloud identity gets no access.
+        logger.warn({ userEmail }, 'User not found in JumpCloud — denying all access');
+        return this.denyAll(userId, userEmail);
       }
 
       const groupNames = result.groups.map((g) => g.name);
@@ -51,11 +60,12 @@ export class RBACResolver {
         scopes: resolved.scopes,
       };
     } catch (err) {
-      logger.warn(
+      // Fail-closed: if we cannot verify the user's groups, deny rather than grant.
+      logger.error(
         { userId, userEmail, error: err },
-        'JumpCloud lookup failed — granting all permissions as fallback',
+        'JumpCloud lookup failed — denying all access (fail-closed)',
       );
-      return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
+      return this.denyAll(userId, userEmail);
     }
   }
 }
