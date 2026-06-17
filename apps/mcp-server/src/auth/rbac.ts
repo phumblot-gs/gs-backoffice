@@ -25,13 +25,29 @@ export class RBACResolver {
    * NO scopes, so the plugin manager exposes zero tools to them.
    */
   private denyAll(userId: string, userEmail: string): ToolContext {
-    return { userId, userEmail, groups: [], permissions: [], scopes: {} };
+    return {
+      userId,
+      userEmail,
+      groups: [],
+      permissions: [],
+      scopes: {},
+      workflows: [],
+      agents: [],
+    };
   }
 
   async resolve(userId: string, userEmail: string): Promise<ToolContext> {
     if (userId === 'dev-user' || !this.jumpcloud) {
       logger.warn({ userId, userEmail }, 'Dev mode — granting all permissions');
-      return { userId, userEmail, groups: ['*'], permissions: ['*'], scopes: { '*': ['*'] } };
+      return {
+        userId,
+        userEmail,
+        groups: ['*'],
+        permissions: ['*'],
+        scopes: { '*': ['*'] },
+        workflows: ['*'],
+        agents: ['*'],
+      };
     }
 
     try {
@@ -67,6 +83,8 @@ export class RBACResolver {
         groups: groupNames,
         permissions: resolved.permissions,
         scopes: resolved.scopes,
+        workflows: resolved.workflows,
+        agents: resolved.agents,
       };
     } catch (err) {
       // Fail-closed: if we cannot verify the user's groups, deny rather than grant.

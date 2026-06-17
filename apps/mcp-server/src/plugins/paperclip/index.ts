@@ -31,11 +31,25 @@ export class PaperclipPlugin implements ServicePlugin {
 
   getTools(): PluginTool[] {
     return [
+      this.listWorkflowsTool(),
       this.startWorkflowTool(),
       this.ticketStatusTool(),
       this.ticketUpdateTool(),
       this.digestTool(),
     ];
+  }
+
+  private listWorkflowsTool(): PluginTool {
+    return {
+      name: 'henri_list_workflows',
+      description:
+        'List the official back office processes (workflows) you are allowed to trigger. ' +
+        'Use this before henri_start_workflow to discover available processes.',
+      schema: z.object({}),
+      requiredPermission: 'paperclip.read',
+      evtEventType: null,
+      execute: async (_input, context) => this.executeListWorkflows(context),
+    };
   }
 
   private startWorkflowTool(): PluginTool {
@@ -106,6 +120,68 @@ export class PaperclipPlugin implements ServicePlugin {
       evtEventType: null,
       execute: async (input) => this.executeDigest(input as { period?: string }),
     };
+  }
+
+  private isWorkflowAllowed(routine: Record<string, unknown>, allowed: string[]): boolean {
+    if (allowed.includes('*')) return true;
+    const keys = [routine.name, routine.shortName, routine.slug]
+      .filter((v): v is string => typeof v === 'string')
+      .map((v) => v.toLowerCase());
+    const allowedLower = allowed.map((a) => a.toLowerCase());
+    return keys.some((k) => allowedLower.includes(k));
+  }
+
+  private async executeListWorkflows(context: ToolContext): Promise<CallToolResult> {
+    try {
+      const allowed = context.workflows ?? [];
+      if (allowed.length === 0) {
+        return {
+          content: [
+            { type: 'text', text: 'You are not authorized to trigger any official process.' },
+          ],
+        };
+      }
+      const raw = (await this.client.listRoutines(this.companyId)) as unknown;
+      const routines = (
+        Array.isArray(raw)
+          ? raw
+          : ((raw as { routines?: unknown[]; data?: unknown[] })?.routines ??
+            (raw as { data?: unknown[] })?.data ??
+            [])
+      ) as Array<Record<string, unknown>>;
+      const visible = routines.filter((r) => this.isWorkflowAllowed(r, allowed));
+      if (visible.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'No official processes are available to you yet. The Methods Officer can publish them as Paperclip routines.',
+            },
+          ],
+        };
+      }
+      const lines = visible.map((r) => {
+        const name = String(r.name ?? r.shortName ?? r.id);
+        const desc = r.description ? ` — ${String(r.description)}` : '';
+        return `- **${name}**${desc}`;
+      });
+      return {
+        content: [
+          { type: 'text', text: `## Official processes you can trigger\n\n${lines.join('\n')}` },
+        ],
+      };
+    } catch (err) {
+      this.logger.error({ error: err }, 'Failed to list workflows');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error listing workflows: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 
   private async executeStartWorkflow(
