@@ -10,6 +10,16 @@
       },
       "workflows": ["*"]
     },
+    "Comex": {
+      "services": {
+        "notion": { "actions": ["read"], "scopes": ["*"] },
+        "paperclip": {
+          "actions": ["read", "create_ticket", "update_ticket"],
+          "scopes": ["*"]
+        }
+      },
+      "workflows": ["*"]
+    },
     "Sales": {
       "services": {
         "notion": {
