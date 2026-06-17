@@ -47,6 +47,19 @@ export class PaperclipClient {
     return this.request('GET', `/companies/${companyId}/agents`);
   }
 
+  /** List a company's routines (official processes / Capability B). */
+  async listRoutines(companyId: string): Promise<Array<Record<string, unknown>>> {
+    return this.request('GET', `/companies/${companyId}/routines`);
+  }
+
+  /** Trigger a routine run with optional input parameters. */
+  async runRoutine(
+    routineId: string,
+    input?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.request('POST', `/routines/${routineId}/run`, input ? { input } : undefined);
+  }
+
   async getAgent(agentId: string): Promise<Record<string, unknown>> {
     return this.request('GET', `/agents/${agentId}`);
   }

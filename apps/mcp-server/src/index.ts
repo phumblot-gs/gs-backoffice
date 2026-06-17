@@ -211,6 +211,8 @@ app.post('/mcp', async (req: Request, res: Response) => {
           groups: ['*'],
           permissions: ['*'],
           scopes: { '*': ['*'] },
+          workflows: ['*'],
+          agents: ['*'],
         },
       );
       await server.connect(transport);
