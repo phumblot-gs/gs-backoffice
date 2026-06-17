@@ -24,7 +24,7 @@
       "services": {
         "notion": {
           "actions": ["read"],
-          "scopes": ["Commercial", "Général", "Comptabilité - Finance"]
+          "scopes": ["Commercial", "General", "Finance"]
         },
         "paperclip": {
           "actions": ["read", "create_ticket"],
@@ -37,7 +37,7 @@
       "services": {
         "notion": {
           "actions": ["read"],
-          "scopes": ["Customer Success", "Commercial", "Général"]
+          "scopes": ["Customer Success", "Commercial", "General"]
         },
         "paperclip": {
           "actions": ["read", "create_ticket"],
@@ -50,7 +50,7 @@
       "services": {
         "notion": {
           "actions": ["read"],
-          "scopes": ["Engineering", "DevOps", "Général"]
+          "scopes": ["Engineering", "DevOps", "General"]
         },
         "paperclip": { "actions": ["read"], "scopes": ["engineering"] }
       },
@@ -60,7 +60,7 @@
       "services": {
         "notion": {
           "actions": ["read"],
-          "scopes": ["Engineering", "Product", "Général"]
+          "scopes": ["Engineering", "Product", "General"]
         },
         "paperclip": {
           "actions": ["read", "create_ticket"],
@@ -71,7 +71,7 @@
     },
     "All Users": {
       "services": {
-        "notion": { "actions": ["read"], "scopes": ["Général"] },
+        "notion": { "actions": ["read"], "scopes": ["General"] },
         "paperclip": { "actions": ["read"], "scopes": ["general"] }
       },
       "workflows": []
