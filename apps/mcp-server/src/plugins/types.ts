@@ -18,6 +18,10 @@ export interface ToolContext {
   groups: string[];
   permissions: string[];
   scopes: Record<string, string[]>;
+  /** Allowed official-process routine names (Capability B). */
+  workflows: string[];
+  /** Allowed expert-agent shortnames (Capability C). */
+  agents: string[];
 }
 
 // --- Plugin tool definition ---
