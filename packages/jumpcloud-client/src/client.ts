@@ -74,11 +74,12 @@ export class JumpCloudClient {
     const data = await this.request(`/users/${userId}/memberof`);
     const rawGroups = UserGroupsResponseSchema.parse(data);
 
-    // Resolve group names
+    // /memberof returns group id + type but not the name — resolve names from cache.
     await this.ensureGroupNameCache();
     return rawGroups.map((g) => ({
-      ...g,
-      name: this.groupNameCache.get(g.id) ?? g.name,
+      id: g.id,
+      type: g.type,
+      name: this.groupNameCache.get(g.id) ?? g.name ?? g.id,
     }));
   }
 
@@ -112,13 +113,14 @@ export class JumpCloudClient {
       return;
     }
 
-    const data = (await this.request('/usergroups?limit=200')) as Array<{
-      id: string;
-      name: string;
-    }>;
+    const raw = (await this.request('/usergroups?limit=200')) as unknown;
+    // v2 list endpoints return a bare array, but tolerate a { results: [...] } wrapper.
+    const groups = (
+      Array.isArray(raw) ? raw : ((raw as { results?: unknown[] }).results ?? [])
+    ) as Array<{ id: string; name: string }>;
     this.groupNameCache.clear();
-    for (const group of data) {
-      this.groupNameCache.set(group.id, group.name);
+    for (const group of groups) {
+      if (group?.id && group?.name) this.groupNameCache.set(group.id, group.name);
     }
     this.groupNameCacheTimestamp = Date.now();
   }

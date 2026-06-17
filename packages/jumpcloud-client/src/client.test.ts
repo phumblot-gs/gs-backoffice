@@ -42,21 +42,29 @@ describe('JumpCloudClient', () => {
   });
 
   describe('getUserGroups', () => {
-    it('returns groups with resolved names', async () => {
-      // First call: /users/{id}/memberof
+    it('resolves names from cache when /memberof omits them (real API shape)', async () => {
+      // /users/{id}/memberof returns id + type only — NO name (matches real JumpCloud).
       mockFetch.mockResolvedValueOnce(
         jsonResponse([
-          { id: 'grp-1', name: 'grp-1', type: 'user_group' },
-          { id: 'grp-2', name: 'grp-2', type: 'user_group' },
+          { id: 'grp-1', type: 'user_group' },
+          { id: 'grp-3', type: 'user_group' },
         ]),
       );
-      // Second call: /usergroups (name resolution)
+      // /usergroups (name resolution)
       mockFetch.mockResolvedValueOnce(jsonResponse(groupListResponse));
 
       const groups = await client.getUserGroups('user-1');
       expect(groups).toHaveLength(2);
       expect(groups[0].name).toBe('Finance');
-      expect(groups[1].name).toBe('Engineering');
+      expect(groups[1].name).toBe('Management Team');
+    });
+
+    it('falls back to the group id when a group is not in the cache', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse([{ id: 'grp-unknown', type: 'user_group' }]));
+      mockFetch.mockResolvedValueOnce(jsonResponse(groupListResponse));
+
+      const groups = await client.getUserGroups('user-1');
+      expect(groups[0].name).toBe('grp-unknown');
     });
 
     it('sends x-api-key header', async () => {
