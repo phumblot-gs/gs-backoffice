@@ -1,80 +1,85 @@
 {
-  "groups": {
-    "Management Team": {
-      "services": {
-        "notion": { "actions": ["read"], "scopes": ["*"] },
-        "paperclip": {
-          "actions": ["read", "create_ticket", "update_ticket"],
-          "scopes": ["*"]
-        }
-      },
-      "workflows": ["*"]
-    },
-    "Comex": {
-      "services": {
-        "notion": { "actions": ["read"], "scopes": ["*"] },
-        "paperclip": {
-          "actions": ["read", "create_ticket", "update_ticket"],
-          "scopes": ["*"]
-        }
-      },
-      "workflows": ["*"]
-    },
-    "Sales": {
-      "services": {
-        "notion": {
-          "actions": ["read"],
-          "scopes": ["Commercial", "General", "Finance"]
+  "companies": {
+    "grafmaker": {
+      "name": "GRAFMAKER",
+      "groups": {
+        "Management Team": {
+          "services": {
+            "notion": { "actions": ["read"], "scopes": ["*"] },
+            "paperclip": {
+              "actions": ["read", "create_ticket", "update_ticket"],
+              "scopes": ["*"]
+            }
+          },
+          "workflows": ["*"]
         },
-        "paperclip": {
-          "actions": ["read", "create_ticket"],
-          "scopes": ["sales"]
-        }
-      },
-      "workflows": ["register_contract", "prospect_brief"]
-    },
-    "Customer Success": {
-      "services": {
-        "notion": {
-          "actions": ["read"],
-          "scopes": ["Customer Success", "Commercial", "General"]
+        "Comex": {
+          "services": {
+            "notion": { "actions": ["read"], "scopes": ["*"] },
+            "paperclip": {
+              "actions": ["read", "create_ticket", "update_ticket"],
+              "scopes": ["*"]
+            }
+          },
+          "workflows": ["*"]
         },
-        "paperclip": {
-          "actions": ["read", "create_ticket"],
-          "scopes": ["customer_success"]
-        }
-      },
-      "workflows": ["client_issue", "onboarding"]
-    },
-    "DevOps": {
-      "services": {
-        "notion": {
-          "actions": ["read"],
-          "scopes": ["Engineering", "DevOps", "General"]
+        "Sales": {
+          "services": {
+            "notion": {
+              "actions": ["read"],
+              "scopes": ["Commercial", "General", "Finance"]
+            },
+            "paperclip": {
+              "actions": ["read", "create_ticket"],
+              "scopes": ["sales"]
+            }
+          },
+          "workflows": ["register_contract", "prospect_brief"]
         },
-        "paperclip": { "actions": ["read"], "scopes": ["engineering"] }
-      },
-      "workflows": ["bug_report", "feature_request"]
-    },
-    "DevProduct": {
-      "services": {
-        "notion": {
-          "actions": ["read"],
-          "scopes": ["Engineering", "Product", "General"]
+        "Customer Success": {
+          "services": {
+            "notion": {
+              "actions": ["read"],
+              "scopes": ["Customer Success", "Commercial", "General"]
+            },
+            "paperclip": {
+              "actions": ["read", "create_ticket"],
+              "scopes": ["customer_success"]
+            }
+          },
+          "workflows": ["client_issue", "onboarding"]
         },
-        "paperclip": {
-          "actions": ["read", "create_ticket"],
-          "scopes": ["engineering", "product"]
+        "DevOps": {
+          "services": {
+            "notion": {
+              "actions": ["read"],
+              "scopes": ["Engineering", "DevOps", "General"]
+            },
+            "paperclip": { "actions": ["read"], "scopes": ["engineering"] }
+          },
+          "workflows": ["bug_report", "feature_request"]
+        },
+        "DevProduct": {
+          "services": {
+            "notion": {
+              "actions": ["read"],
+              "scopes": ["Engineering", "Product", "General"]
+            },
+            "paperclip": {
+              "actions": ["read", "create_ticket"],
+              "scopes": ["engineering", "product"]
+            }
+          },
+          "workflows": ["bug_report", "feature_request"]
+        },
+        "All Users": {
+          "services": {
+            "notion": { "actions": ["read"], "scopes": ["General"] },
+            "paperclip": { "actions": ["read"], "scopes": ["general"] }
+          },
+          "workflows": []
         }
-      },
-      "workflows": ["bug_report", "feature_request"]
-    },
-    "All Users": {
-      "services": {
-        "notion": { "actions": ["read"], "scopes": ["General"] },
-        "paperclip": { "actions": ["read"], "scopes": ["general"] }
-      },
-      "workflows": []
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-import { type RBACConfig, resolvePermissions } from '@gs-backoffice/core';
+import { type PerCompanyRBACConfig, resolveCompanyAccess } from '@gs-backoffice/core';
 import { JumpCloudClient } from '@gs-backoffice/jumpcloud-client';
 import pino from 'pino';
 import type { ToolContext } from '../plugins/types.js';
@@ -7,11 +7,17 @@ const logger = pino({ name: 'rbac' });
 
 export class RBACResolver {
   private readonly jumpcloud: JumpCloudClient | null;
-  private readonly rbacConfig: RBACConfig;
+  private readonly rbacConfig: PerCompanyRBACConfig;
+  private readonly companySlug: string;
 
-  constructor(jumpcloud: JumpCloudClient | null, rbacConfig: RBACConfig) {
+  constructor(
+    jumpcloud: JumpCloudClient | null,
+    rbacConfig: PerCompanyRBACConfig,
+    companySlug: string,
+  ) {
     this.jumpcloud = jumpcloud;
     this.rbacConfig = rbacConfig;
+    this.companySlug = companySlug;
   }
 
   /**
@@ -39,17 +45,20 @@ export class RBACResolver {
       }
 
       const groupNames = result.groups.map((g) => g.name);
-      const resolved = resolvePermissions(this.rbacConfig, groupNames);
+      const resolved = resolveCompanyAccess(this.rbacConfig, this.companySlug, groupNames);
 
       logger.info(
         {
           userId,
           userEmail,
           jcUser: result.user.username,
+          company: this.companySlug,
           groups: groupNames,
           permissions: resolved.permissions,
         },
-        'RBAC resolved',
+        resolved.permissions.length > 0
+          ? 'RBAC resolved'
+          : 'RBAC resolved — no access on this company (denying)',
       );
 
       return {
