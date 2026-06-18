@@ -22,6 +22,8 @@ export interface ToolContext {
   workflows: string[];
   /** Allowed expert-agent shortnames (Capability C). */
   agents: string[];
+  /** Company process→approval-scope catalog (Capability 2b approval gate). */
+  processes?: Record<string, { scope: string }>;
 }
 
 // --- Plugin tool definition ---

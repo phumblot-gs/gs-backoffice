@@ -7,7 +7,7 @@
           "services": {
             "notion": { "actions": ["read"], "scopes": ["*"] },
             "paperclip": {
-              "actions": ["read", "create_ticket", "update_ticket"],
+              "actions": ["read", "create_ticket", "update_ticket", "approve"],
               "scopes": ["*"]
             }
           },
@@ -17,7 +17,7 @@
           "services": {
             "notion": { "actions": ["read"], "scopes": ["*"] },
             "paperclip": {
-              "actions": ["read", "create_ticket", "update_ticket"],
+              "actions": ["read", "create_ticket", "update_ticket", "approve"],
               "scopes": ["*"]
             }
           },
@@ -79,6 +79,14 @@
           },
           "workflows": []
         }
+      },
+      "processes": {
+        "register_contract": { "scope": "sales" },
+        "prospect_brief": { "scope": "sales" },
+        "client_issue": { "scope": "customer_success" },
+        "onboarding": { "scope": "customer_success" },
+        "bug_report": { "scope": "engineering" },
+        "feature_request": { "scope": "product" }
       }
     }
   }
