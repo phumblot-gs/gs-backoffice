@@ -160,11 +160,18 @@ jobs:
             --service mcp-server \
             --force-new-deployment
 
+      - name: Update Notify consumer service
+        run: |
+          aws ecs update-service \
+            --cluster gs-backoffice-production \
+            --service notify-consumer \
+            --force-new-deployment
+
       - name: Wait for services stable
         run: |
           aws ecs wait services-stable \
             --cluster gs-backoffice-production \
-            --services paperclip mcp-server
+            --services paperclip mcp-server notify-consumer
         timeout-minutes: 10
 
   notify:
