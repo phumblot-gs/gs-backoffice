@@ -66,6 +66,17 @@ export class PaperclipClient {
     return this.request('POST', `/routines/${routineId}/run`, hasBody ? body : undefined);
   }
 
+  /** List a routine's runs — used to resolve the issue Paperclip links to a freshly
+   * triggered run. Tolerates array or { runs | data } envelope shapes. */
+  async listRoutineRuns(routineId: string): Promise<Array<Record<string, unknown>>> {
+    const raw = (await this.request('GET', `/routines/${routineId}/runs`)) as unknown;
+    return (
+      Array.isArray(raw)
+        ? raw
+        : ((raw as { runs?: unknown[] })?.runs ?? (raw as { data?: unknown[] })?.data ?? [])
+    ) as Array<Record<string, unknown>>;
+  }
+
   async getAgent(agentId: string): Promise<Record<string, unknown>> {
     return this.request('GET', `/agents/${agentId}`);
   }
