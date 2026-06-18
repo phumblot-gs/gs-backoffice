@@ -225,6 +225,10 @@ resource "aws_ecs_task_definition" "mcp" {
         valueFrom = "${var.app_secrets_arn}:EVT_API_KEY::"
       },
       {
+        name      = "EVT_ACCOUNT_ID"
+        valueFrom = "${var.app_secrets_arn}:EVT_ACCOUNT_ID::"
+      },
+      {
         name      = "JUMPCLOUD_API_KEY"
         valueFrom = "${var.app_secrets_arn}:JUMPCLOUD_API_KEY::"
       },
