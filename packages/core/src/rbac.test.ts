@@ -3,10 +3,42 @@ import {
   resolvePermissions,
   resolveCompanyAccess,
   resolveAccessibleCompanies,
+  canApprove,
   RBACConfigSchema,
   PerCompanyRBACConfigSchema,
 } from './rbac.js';
-import type { RBACConfig, PerCompanyRBACConfig } from './rbac.js';
+import type { RBACConfig, PerCompanyRBACConfig, ResolvedAccess } from './rbac.js';
+
+describe('canApprove (approval gate 2b)', () => {
+  const access = (permissions: string[], paperclipScopes: string[]): ResolvedAccess => ({
+    permissions,
+    scopes: { paperclip: paperclipScopes },
+    workflows: [],
+    agents: [],
+  });
+
+  it('denies without the paperclip.approve permission', () => {
+    expect(canApprove(access(['paperclip.read'], ['*']), 'finance')).toBe(false);
+  });
+
+  it('leadership (scope *) approves any scope, including unscoped', () => {
+    expect(canApprove(access(['paperclip.approve'], ['*']), 'finance')).toBe(true);
+    expect(canApprove(access(['paperclip.approve'], ['*']), null)).toBe(true);
+  });
+
+  it('a scoped approver approves only its own scope', () => {
+    expect(canApprove(access(['paperclip.approve'], ['finance']), 'finance')).toBe(true);
+    expect(canApprove(access(['paperclip.approve'], ['finance']), 'sales')).toBe(false);
+  });
+
+  it('an unscoped process is leadership-only', () => {
+    expect(canApprove(access(['paperclip.approve'], ['finance']), null)).toBe(false);
+  });
+
+  it('superuser (* permission, dev) approves anything', () => {
+    expect(canApprove(access(['*'], []), 'finance')).toBe(true);
+  });
+});
 
 const config: RBACConfig = {
   groups: {
@@ -162,6 +194,7 @@ describe('resolveCompanyAccess', () => {
       scopes: {},
       workflows: [],
       agents: [],
+      processes: {},
     });
   });
 

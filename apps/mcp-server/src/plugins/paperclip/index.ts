@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { Logger } from 'pino';
+import { canApprove, createBackofficeEvent } from '@gs-backoffice/core';
+import type { EvtClient } from '@gs-backoffice/evt-client';
 import type {
   ServicePlugin,
   PluginTool,
@@ -22,6 +24,71 @@ export function extractWorkflowCode(title: string | undefined | null): string | 
   return m ? m[1] : null;
 }
 
+/**
+ * Approval gate (Capability 2b). A process is SENSITIVE when its routine title
+ * starts with `!` (the Methods Officer marks it, e.g. "!Pay supplier (pay-supplier)").
+ * A sensitive process is NOT run on request: an approval-request ticket is created
+ * and a separate authorized approver must approve it before the routine runs.
+ */
+export function isSensitiveProcess(title: string | undefined | null): boolean {
+  return !!title && title.trimStart().startsWith('!');
+}
+
+// Machine-readable marker embedded in the approval ticket description (the API has
+// no metadata field). The fenced JSON block is the source of truth re-read on approval.
+const APPROVAL_MARKER = 'gs-approval-request';
+
+interface ApprovalPayload {
+  kind: typeof APPROVAL_MARKER;
+  routineId: string;
+  processCode: string;
+  scope: string | null;
+  requestedBy: string;
+  parameters?: Record<string, string>;
+  notes?: string;
+}
+
+export function buildApprovalDescription(p: ApprovalPayload): string {
+  const human = [
+    `**Sensitive process awaiting approval.**`,
+    ``,
+    `- Process: \`${p.processCode}\``,
+    `- Requested by: ${p.requestedBy}`,
+    `- Approval scope: ${p.scope ?? 'leadership (no scope declared)'}`,
+    p.parameters && Object.keys(p.parameters).length
+      ? `- Parameters: ${Object.entries(p.parameters)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(', ')}`
+      : null,
+    p.notes ? `- Notes: ${p.notes}` : null,
+    ``,
+    `An authorized approver (≠ requester) must run \`henri_approve\` on this ticket.`,
+    ``,
+    '```json',
+    JSON.stringify(p),
+    '```',
+  ]
+    .filter((l) => l !== null)
+    .join('\n');
+  return human;
+}
+
+export function parseApprovalDescription(
+  description: string | undefined | null,
+): ApprovalPayload | null {
+  if (!description) return null;
+  const m = description.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[1]) as ApprovalPayload;
+    return parsed.kind === APPROVAL_MARKER && parsed.routineId && parsed.processCode
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export class PaperclipPlugin implements ServicePlugin {
   readonly name = 'paperclip';
   readonly description = 'Manage back office workflows and tickets via Paperclip';
@@ -30,10 +97,18 @@ export class PaperclipPlugin implements ServicePlugin {
   private client!: PaperclipClient;
   private logger!: Logger;
   private companyId = '';
+  private evtClient: EvtClient | null = null;
+  private evtAccountId = '';
+  private environment: 'development' | 'staging' | 'production' = 'development';
 
   async initialize(config: PluginInitConfig): Promise<void> {
     this.logger = config.logger;
     this.companyId = config.credentials.PAPERCLIP_COMPANY_ID ?? '';
+    this.evtClient = config.evtClient;
+    this.evtAccountId = process.env.EVT_ACCOUNT_ID ?? '';
+    const env = process.env.NODE_ENV;
+    this.environment =
+      env === 'production' ? 'production' : env === 'staging' ? 'staging' : 'development';
     this.client = new PaperclipClient({
       apiUrl: config.credentials.PAPERCLIP_API_URL ?? 'http://localhost:3100',
       apiKey: config.credentials.PAPERCLIP_API_KEY,
@@ -44,6 +119,8 @@ export class PaperclipPlugin implements ServicePlugin {
     return [
       this.listWorkflowsTool(),
       this.startWorkflowTool(),
+      this.listApprovalsTool(),
+      this.approveTool(),
       this.ticketStatusTool(),
       this.ticketUpdateTool(),
       this.digestTool(),
@@ -85,6 +162,40 @@ export class PaperclipPlugin implements ServicePlugin {
       execute: async (input, context) =>
         this.executeStartWorkflow(
           input as { workflow: string; parameters?: Record<string, string>; notes?: string },
+          context,
+        ),
+    };
+  }
+
+  private listApprovalsTool(): PluginTool {
+    return {
+      name: 'henri_list_approvals',
+      description:
+        'List sensitive-process approval requests awaiting YOUR decision. ' +
+        'Shows only requests you are authorized to approve (matching scope, and not your own request).',
+      schema: z.object({}),
+      requiredPermission: 'paperclip.approve',
+      evtEventType: null,
+      execute: async (_input, context) => this.executeListApprovals(context),
+    };
+  }
+
+  private approveTool(): PluginTool {
+    return {
+      name: 'henri_approve',
+      description:
+        'Approve or reject a sensitive-process approval request (see henri_list_approvals). ' +
+        'On approval the process runs; you cannot approve your own request.',
+      schema: z.object({
+        ticketId: z.string().describe('The approval ticket ID (e.g., "GRA-7")'),
+        decision: z.enum(['approve', 'reject']).describe('Your decision'),
+        note: z.string().optional().describe('Optional decision note (recorded on the ticket)'),
+      }),
+      requiredPermission: 'paperclip.approve',
+      evtEventType: 'backoffice.approval.decided',
+      execute: async (input, context) =>
+        this.executeApprove(
+          input as { ticketId: string; decision: 'approve' | 'reject'; note?: string },
           context,
         ),
     };
@@ -273,6 +384,13 @@ export class PaperclipPlugin implements ServicePlugin {
         };
       }
 
+      // Approval gate (2b): a sensitive process (routine title starts with `!`) is
+      // NOT run on request — create an approval ticket and wait for an authorized
+      // approver (≠ requester) to run henri_approve.
+      if (isSensitiveProcess(typeof match.title === 'string' ? match.title : null)) {
+        return this.createApprovalRequest(match, code!, input, context);
+      }
+
       const run = await this.client.runRoutine(String(match.id), {
         variables: input.parameters,
         payload: { requestedBy: context.userEmail, notes: input.notes, processCode: code },
@@ -299,6 +417,267 @@ export class PaperclipPlugin implements ServicePlugin {
           {
             type: 'text',
             text: `Error starting process: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  /** Resolve a process's approval scope from the company catalog (null = leadership-only). */
+  private processScope(code: string, context: ToolContext): string | null {
+    return context.processes?.[code]?.scope ?? null;
+  }
+
+  /** A claude.ai deep-link that opens a prefilled prompt for the approver to decide. */
+  private approvalDeepLink(ticketId: string, code: string): string {
+    const q = `Review back office approval request ${ticketId} for the sensitive process "${code}", then approve or reject it with henri_approve.`;
+    return `https://claude.ai/new?q=${encodeURIComponent(q)}`;
+  }
+
+  /** Best-effort EVT publish for the approval lifecycle (audit + Google Chat routing). Never throws. */
+  private async publishApproval(
+    eventType: string,
+    payload: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<void> {
+    if (!this.evtClient) return;
+    try {
+      const event = createBackofficeEvent(
+        eventType,
+        { userId: context.userId, accountId: this.evtAccountId, role: context.groups[0] },
+        {
+          accountId: this.evtAccountId,
+          resourceType: 'approval',
+          resourceId: String(payload.ticketId ?? ''),
+        },
+        payload,
+        this.environment,
+      );
+      await this.evtClient.publish(event);
+    } catch (err) {
+      this.logger.warn({ error: err, eventType }, 'EVT approval publish failed (non-fatal)');
+    }
+  }
+
+  /** Create the approval-request ticket for a sensitive process (does NOT run it). */
+  private async createApprovalRequest(
+    match: Record<string, unknown>,
+    code: string,
+    input: { parameters?: Record<string, string>; notes?: string },
+    context: ToolContext,
+  ): Promise<CallToolResult> {
+    const scope = this.processScope(code, context);
+    const payload: ApprovalPayload = {
+      kind: APPROVAL_MARKER,
+      routineId: String(match.id),
+      processCode: code,
+      scope,
+      requestedBy: context.userEmail,
+      parameters: input.parameters,
+      notes: input.notes,
+    };
+    const issue = await this.client.createIssue({
+      companyId: this.companyId,
+      title: `Approval needed: ${code} (requested by ${context.userEmail})`,
+      status: 'blocked',
+      priority: 'high',
+      description: buildApprovalDescription(payload),
+    });
+    const ticketId = String(issue.identifier ?? issue.shortId ?? issue.id ?? '');
+    await this.publishApproval(
+      'backoffice.approval.requested',
+      {
+        ticketId,
+        processCode: code,
+        scope,
+        requestedBy: context.userEmail,
+        approveUrl: this.approvalDeepLink(ticketId, code),
+      },
+      context,
+    );
+    const who = scope ? `a **${scope}** approver` : 'a member of leadership';
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🔒 **${code}** is a sensitive process — it requires approval before running.\n\nApproval request created: ticket **${ticketId}**. ${who} (other than you) must approve it via \`henri_approve\`, then it runs automatically. Track it with \`henri_ticket_status ${ticketId}\`.`,
+        },
+      ],
+    };
+  }
+
+  private async executeApprove(
+    input: { ticketId: string; decision: 'approve' | 'reject'; note?: string },
+    context: ToolContext,
+  ): Promise<CallToolResult> {
+    try {
+      const issue = await this.client.getIssue(input.ticketId);
+      const payload = parseApprovalDescription(
+        typeof issue.description === 'string' ? issue.description : null,
+      );
+      if (!payload) {
+        return {
+          content: [
+            { type: 'text', text: `Ticket ${input.ticketId} is not a pending approval request.` },
+          ],
+          isError: true,
+        };
+      }
+      // Idempotency: only a still-blocked request can be decided.
+      if (issue.status && issue.status !== 'blocked') {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Approval ${input.ticketId} is already resolved (status: ${String(issue.status)}).`,
+            },
+          ],
+        };
+      }
+      // Separation of duties: the requester cannot approve their own request.
+      if (payload.requestedBy.toLowerCase() === context.userEmail.toLowerCase()) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `You cannot approve your own request (${input.ticketId}). Another authorized approver must decide.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      // Authorization: must hold paperclip.approve covering the process scope.
+      if (!canApprove(context, payload.scope)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `You are not authorized to approve process "${payload.processCode}" (scope: ${payload.scope ?? 'leadership'}).`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      if (input.decision === 'reject') {
+        await this.client.updateIssue(input.ticketId, {
+          status: 'cancelled',
+          comment: `⛔ Rejected by ${context.userEmail}${input.note ? `: ${input.note}` : ''}.`,
+        });
+        await this.publishApproval(
+          'backoffice.approval.decided',
+          {
+            ticketId: input.ticketId,
+            processCode: payload.processCode,
+            decision: 'rejected',
+            approver: context.userEmail,
+            requestedBy: payload.requestedBy,
+          },
+          context,
+        );
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `⛔ Request **${input.ticketId}** (${payload.processCode}) rejected. The process will not run.`,
+            },
+          ],
+        };
+      }
+
+      // Approve → run the routine now, on behalf of the original requester.
+      const run = await this.client.runRoutine(payload.routineId, {
+        variables: payload.parameters,
+        payload: {
+          requestedBy: payload.requestedBy,
+          approvedBy: context.userEmail,
+          processCode: payload.processCode,
+          approvalTicket: input.ticketId,
+        },
+      });
+      const runId = String(run.id ?? run.runId ?? '');
+      const runTicket = runId ? await this.resolveLinkedTicket(payload.routineId, runId) : null;
+      await this.client.updateIssue(input.ticketId, {
+        status: 'done',
+        comment: `✅ Approved by ${context.userEmail}${input.note ? `: ${input.note}` : ''}. Run started${runTicket ? ` → ${runTicket}` : ''}.`,
+      });
+      await this.publishApproval(
+        'backoffice.approval.decided',
+        {
+          ticketId: input.ticketId,
+          processCode: payload.processCode,
+          decision: 'approved',
+          approver: context.userEmail,
+          requestedBy: payload.requestedBy,
+          runTicket,
+        },
+        context,
+      );
+      const ref = runTicket
+        ? `ticket **${runTicket}** — track with henri_ticket_status`
+        : `run **${runId || '(queued)'}**`;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `✅ Request **${input.ticketId}** (${payload.processCode}) approved — process started as ${ref}.`,
+          },
+        ],
+      };
+    } catch (err) {
+      this.logger.error({ error: err, ticketId: input.ticketId }, 'Approval decision failed');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error processing approval: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
+  private async executeListApprovals(context: ToolContext): Promise<CallToolResult> {
+    try {
+      const issues = await this.client.listCompanyIssues(this.companyId);
+      const pending = issues
+        .map((i) => ({
+          i,
+          p: parseApprovalDescription(typeof i.description === 'string' ? i.description : null),
+        }))
+        .filter(
+          ({ i, p }) =>
+            p !== null &&
+            (i.status ?? 'blocked') === 'blocked' &&
+            p.requestedBy.toLowerCase() !== context.userEmail.toLowerCase() &&
+            canApprove(context, p.scope),
+        );
+      if (pending.length === 0) {
+        return {
+          content: [{ type: 'text', text: 'No approval requests are awaiting your decision.' }],
+        };
+      }
+      const lines = pending.map(
+        ({ i, p }) =>
+          `- **${String(i.identifier ?? i.shortId ?? i.id)}** — \`${p!.processCode}\` (scope: ${p!.scope ?? 'leadership'}), requested by ${p!.requestedBy}`,
+      );
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `## Approval requests awaiting your decision\n\nDecide with henri_approve.\n\n${lines.join('\n')}`,
+          },
+        ],
+      };
+    } catch (err) {
+      this.logger.error({ error: err }, 'Failed to list approvals');
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error listing approvals: ${err instanceof Error ? err.message : String(err)}`,
           },
         ],
         isError: true,

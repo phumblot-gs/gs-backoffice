@@ -85,6 +85,7 @@ export class RBACResolver {
         scopes: resolved.scopes,
         workflows: resolved.workflows,
         agents: resolved.agents,
+        processes: resolved.processes,
       };
     } catch (err) {
       // Fail-closed: if we cannot verify the user's groups, deny rather than grant.
