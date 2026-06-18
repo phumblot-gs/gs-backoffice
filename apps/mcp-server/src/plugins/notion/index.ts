@@ -46,8 +46,7 @@ export class NotionPlugin implements ServicePlugin {
     // withRetry() below still covers genuine transient blips.
     this.client = new Client({
       auth: token || undefined,
-      fetch: ((url: string, init?: RequestInit) =>
-        fetch(url, init)) as unknown as NonNullable<
+      fetch: ((url: string, init?: RequestInit) => fetch(url, init)) as unknown as NonNullable<
         ConstructorParameters<typeof Client>[0]
       >['fetch'],
     });
