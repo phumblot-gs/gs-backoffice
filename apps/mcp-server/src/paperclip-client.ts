@@ -52,12 +52,18 @@ export class PaperclipClient {
     return this.request('GET', `/companies/${companyId}/routines`);
   }
 
-  /** Trigger a routine run with optional input parameters. */
+  /** Trigger a routine run. `variables` (string/number/boolean) and `payload`
+   * map to the routine run contract; an idempotencyKey avoids duplicate runs. */
   async runRoutine(
     routineId: string,
-    input?: Record<string, unknown>,
+    body?: {
+      payload?: Record<string, unknown>;
+      variables?: Record<string, string | number | boolean>;
+      idempotencyKey?: string;
+    },
   ): Promise<Record<string, unknown>> {
-    return this.request('POST', `/routines/${routineId}/run`, input ? { input } : undefined);
+    const hasBody = body && (body.payload || body.variables || body.idempotencyKey);
+    return this.request('POST', `/routines/${routineId}/run`, hasBody ? body : undefined);
   }
 
   async getAgent(agentId: string): Promise<Record<string, unknown>> {
