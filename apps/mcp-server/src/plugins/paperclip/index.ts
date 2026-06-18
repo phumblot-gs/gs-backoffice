@@ -9,6 +9,19 @@ import type {
 } from '../types.js';
 import { PaperclipClient } from '../../paperclip-client.js';
 
+/**
+ * Employee-triggerable official processes carry a stable code in parentheses at
+ * the END of their routine title, e.g. "Register a contract (register-contract)".
+ * That code is the handle referenced in config/rbac.json `workflows`. Routines
+ * WITHOUT such a code are internal automations (e.g. PR validation) and are
+ * NEVER exposed to employees. Returns the code, or null.
+ */
+export function extractWorkflowCode(title: string | undefined | null): string | null {
+  if (!title) return null;
+  const m = title.match(/\(([A-Za-z0-9][A-Za-z0-9_-]*)\)\s*$/);
+  return m ? m[1] : null;
+}
+
 export class PaperclipPlugin implements ServicePlugin {
   readonly name = 'paperclip';
   readonly description = 'Manage back office workflows and tickets via Paperclip';
@@ -17,12 +30,10 @@ export class PaperclipPlugin implements ServicePlugin {
   private client!: PaperclipClient;
   private logger!: Logger;
   private companyId = '';
-  private chiefOfStaffAgentId = '';
 
   async initialize(config: PluginInitConfig): Promise<void> {
     this.logger = config.logger;
     this.companyId = config.credentials.PAPERCLIP_COMPANY_ID ?? '';
-    this.chiefOfStaffAgentId = config.credentials.CHIEF_OF_STAFF_AGENT_ID ?? '';
     this.client = new PaperclipClient({
       apiUrl: config.credentials.PAPERCLIP_API_URL ?? 'http://localhost:3100',
       apiKey: config.credentials.PAPERCLIP_API_KEY,
@@ -56,16 +67,17 @@ export class PaperclipPlugin implements ServicePlugin {
     return {
       name: 'henri_start_workflow',
       description:
-        'Start a back office workflow (e.g., "invoice client X", "register contract"). ' +
-        'Creates a ticket that will be handled by the appropriate agent.',
+        'Trigger an official back office process by its code. ' +
+        'Call henri_list_workflows first to get the available process codes. ' +
+        'Only processes you are explicitly authorized for can be triggered.',
       schema: z.object({
         workflow: z
           .string()
-          .describe('Name of the workflow to start (e.g., "invoice client Acme Corp")'),
+          .describe('The process CODE from henri_list_workflows (e.g., "register-contract")'),
         parameters: z
           .record(z.string())
           .optional()
-          .describe('Key-value parameters for the workflow'),
+          .describe('Key-value parameters passed to the process'),
         notes: z.string().optional().describe('Additional notes'),
       }),
       requiredPermission: 'paperclip.create_ticket',
@@ -122,13 +134,21 @@ export class PaperclipPlugin implements ServicePlugin {
     };
   }
 
-  private isWorkflowAllowed(routine: Record<string, unknown>, allowed: string[]): boolean {
+  /** Fetch the company's routines, tolerating array or { routines | data } shapes. */
+  private async fetchRoutines(): Promise<Array<Record<string, unknown>>> {
+    const raw = (await this.client.listRoutines(this.companyId)) as unknown;
+    return (
+      Array.isArray(raw)
+        ? raw
+        : ((raw as { routines?: unknown[] }).routines ?? (raw as { data?: unknown[] }).data ?? [])
+    ) as Array<Record<string, unknown>>;
+  }
+
+  /** A process code is allowed if the user has `*` or the code is in their allowlist. */
+  private codeAllowed(code: string | null, allowed: string[]): boolean {
+    if (!code) return false;
     if (allowed.includes('*')) return true;
-    const keys = [routine.name, routine.shortName, routine.slug]
-      .filter((v): v is string => typeof v === 'string')
-      .map((v) => v.toLowerCase());
-    const allowedLower = allowed.map((a) => a.toLowerCase());
-    return keys.some((k) => allowedLower.includes(k));
+    return allowed.map((a) => a.toLowerCase()).includes(code.toLowerCase());
   }
 
   private async executeListWorkflows(context: ToolContext): Promise<CallToolResult> {
@@ -141,33 +161,37 @@ export class PaperclipPlugin implements ServicePlugin {
           ],
         };
       }
-      const raw = (await this.client.listRoutines(this.companyId)) as unknown;
-      const routines = (
-        Array.isArray(raw)
-          ? raw
-          : ((raw as { routines?: unknown[]; data?: unknown[] })?.routines ??
-            (raw as { data?: unknown[] })?.data ??
-            [])
-      ) as Array<Record<string, unknown>>;
-      const visible = routines.filter((r) => this.isWorkflowAllowed(r, allowed));
+      const visible = (await this.fetchRoutines())
+        .map((r) => ({
+          r,
+          code: extractWorkflowCode(typeof r.title === 'string' ? r.title : null),
+        }))
+        .filter(({ code }) => this.codeAllowed(code, allowed));
       if (visible.length === 0) {
         return {
           content: [
             {
               type: 'text',
-              text: 'No official processes are available to you yet. The Methods Officer can publish them as Paperclip routines.',
+              text: 'No official processes are available to you yet. Publish them as Paperclip routines whose title ends with a code, e.g. "Register a contract (register-contract)", then allow the code in config/rbac.json.',
             },
           ],
         };
       }
-      const lines = visible.map((r) => {
-        const name = String(r.name ?? r.shortName ?? r.id);
-        const desc = r.description ? ` — ${String(r.description)}` : '';
-        return `- **${name}**${desc}`;
+      const lines = visible.map(({ r, code }) => {
+        const title = String(r.title ?? r.id);
+        const firstLine =
+          typeof r.description === 'string' && r.description
+            ? ` — ${r.description.split('\n')[0].slice(0, 120)}`
+            : '';
+        const paused = r.status === 'paused' ? ' _(paused)_' : '';
+        return `- \`${code}\` — **${title}**${paused}${firstLine}`;
       });
       return {
         content: [
-          { type: 'text', text: `## Official processes you can trigger\n\n${lines.join('\n')}` },
+          {
+            type: 'text',
+            text: `## Official processes you can trigger\n\nUse the code with henri_start_workflow.\n\n${lines.join('\n')}`,
+          },
         ],
       };
     } catch (err) {
@@ -188,47 +212,58 @@ export class PaperclipPlugin implements ServicePlugin {
     input: { workflow: string; parameters?: Record<string, string>; notes?: string },
     context: ToolContext,
   ): Promise<CallToolResult> {
+    const requested = input.workflow.trim();
+    const allowed = context.workflows ?? [];
     try {
-      const paramsList = input.parameters
-        ? Object.entries(input.parameters)
-            .map(([k, v]) => `- **${k}:** ${v}`)
-            .join('\n')
-        : '';
+      if (allowed.length === 0) {
+        return {
+          content: [
+            { type: 'text', text: 'You are not authorized to trigger any official process.' },
+          ],
+        };
+      }
 
-      const issue = await this.client.createIssue({
-        companyId: this.companyId,
-        title: `Workflow: ${input.workflow.slice(0, 180)}`,
-        description: [
-          `**Requested by:** ${context.userEmail}`,
-          `**Workflow:** ${input.workflow}`,
-          paramsList ? `\n**Parameters:**\n${paramsList}` : '',
-          input.notes ? `\n**Notes:** ${input.notes}` : '',
-        ].join('\n'),
-        assigneeAgentId: this.chiefOfStaffAgentId,
-        priority: 'medium',
-        metadata: {
-          workflowName: input.workflow,
-          requestedBy: context.userEmail,
-          parameters: input.parameters,
-        },
+      // Resolve the routine by its title code (the official-process handle).
+      const match = (await this.fetchRoutines()).find(
+        (r) =>
+          extractWorkflowCode(typeof r.title === 'string' ? r.title : null)?.toLowerCase() ===
+          requested.toLowerCase(),
+      );
+      const code = match ? extractWorkflowCode(String(match.title)) : null;
+
+      // Fail-closed: unknown process OR not in the user's allowlist → identical denial
+      // (don't reveal the existence of processes the user can't trigger).
+      if (!match || !this.codeAllowed(code, allowed)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Unknown or unauthorized process "${requested}". Call henri_list_workflows to see what you can trigger.`,
+            },
+          ],
+        };
+      }
+
+      const run = await this.client.runRoutine(String(match.id), {
+        variables: input.parameters,
+        payload: { requestedBy: context.userEmail, notes: input.notes, processCode: code },
       });
-
-      const ticketId = issue.identifier ?? issue.shortId ?? issue.id;
+      const runId = run.id ?? run.runId ?? '(queued)';
       return {
         content: [
           {
             type: 'text',
-            text: `Workflow "${input.workflow}" started — ticket **${ticketId}**. The Chief of Staff will delegate to the appropriate agent. You can check progress with henri_ticket_status.`,
+            text: `Official process **${code}** (${String(match.title)}) triggered — run **${String(runId)}**. The assigned agent will handle it.`,
           },
         ],
       };
     } catch (err) {
-      this.logger.error({ error: err }, 'Failed to create workflow ticket');
+      this.logger.error({ error: err, workflow: requested }, 'Failed to start workflow');
       return {
         content: [
           {
             type: 'text',
-            text: `Error starting workflow: ${err instanceof Error ? err.message : String(err)}`,
+            text: `Error starting process: ${err instanceof Error ? err.message : String(err)}`,
           },
         ],
         isError: true,
