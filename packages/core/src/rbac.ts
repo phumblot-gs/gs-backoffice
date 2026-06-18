@@ -17,6 +17,16 @@ export const RBACGroupConfigSchema = z.object({
 
 export type RBACGroupConfig = z.infer<typeof RBACGroupConfigSchema>;
 
+// Per-process metadata for the approval gate (Capability 2b). `scope` routes a
+// sensitive process to the right approvers: a user may approve it if they hold
+// `paperclip.approve` AND a `paperclip` scope of `*` or this exact scope.
+// A process with no catalog entry falls back to leadership-only (scope `*`).
+export const ProcessConfigSchema = z.object({
+  scope: z.string(),
+});
+
+export type ProcessConfig = z.infer<typeof ProcessConfigSchema>;
+
 // --- Legacy global (single-company) shape -------------------------------------
 export const RBACConfigSchema = z.object({
   groups: z.record(z.string(), RBACGroupConfigSchema),
@@ -28,6 +38,8 @@ export type RBACConfig = z.infer<typeof RBACConfigSchema>;
 export const CompanyConfigSchema = z.object({
   name: z.string().optional(),
   groups: z.record(z.string(), RBACGroupConfigSchema),
+  // Catalog mapping official-process codes to an approval scope (Capability 2b).
+  processes: z.record(z.string(), ProcessConfigSchema).optional(),
 });
 
 export type CompanyConfig = z.infer<typeof CompanyConfigSchema>;
@@ -47,6 +59,22 @@ export interface ResolvedAccess {
   workflows: string[];
   /** Allowed expert-agent shortnames. */
   agents: string[];
+  /** Company process→approval-scope catalog (company-level, not user-specific). */
+  processes?: Record<string, ProcessConfig>;
+}
+
+/**
+ * Whether a resolved user may approve a sensitive process of the given scope.
+ * Requires the `paperclip.approve` permission AND a `paperclip` scope covering
+ * the process: `*` (leadership) approves anything; a scoped approver approves
+ * only its own scope; an unscoped process (`scope === null`) is leadership-only.
+ */
+export function canApprove(access: ResolvedAccess, scope: string | null): boolean {
+  if (access.permissions.includes('*')) return true; // superuser / dev
+  if (!access.permissions.includes('paperclip.approve')) return false;
+  const paperclipScopes = access.scopes['paperclip'] ?? access.scopes['*'] ?? [];
+  if (paperclipScopes.includes('*')) return true;
+  return scope !== null && paperclipScopes.includes(scope);
 }
 
 /**
@@ -111,8 +139,8 @@ export function resolveCompanyAccess(
   groups: string[],
 ): ResolvedAccess {
   const company = config.companies[companyKey];
-  if (!company) return { permissions: [], scopes: {}, workflows: [], agents: [] };
-  return accumulateGroups(company.groups, groups);
+  if (!company) return { permissions: [], scopes: {}, workflows: [], agents: [], processes: {} };
+  return { ...accumulateGroups(company.groups, groups), processes: company.processes ?? {} };
 }
 
 /**

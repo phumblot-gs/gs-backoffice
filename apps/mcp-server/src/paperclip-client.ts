@@ -19,24 +19,41 @@ export class PaperclipClient {
   async createIssue(params: {
     companyId: string;
     title: string;
+    status: string;
     description?: string;
     assigneeAgentId?: string;
     priority?: string;
-    labels?: string[];
-    metadata?: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
     return this.request('POST', `/companies/${params.companyId}/issues`, {
       title: params.title,
+      status: params.status,
       description: params.description,
       assigneeAgentId: params.assigneeAgentId,
       priority: params.priority,
-      labels: params.labels,
-      metadata: params.metadata,
     });
   }
 
   async getIssue(issueId: string): Promise<Record<string, unknown>> {
     return this.request('GET', `/issues/${issueId}`);
+  }
+
+  /** Update an issue (e.g. status transition for the approval gate). */
+  async updateIssue(
+    issueId: string,
+    body: { status?: string; comment?: string },
+  ): Promise<Record<string, unknown>> {
+    return this.request('PATCH', `/issues/${issueId}`, body);
+  }
+
+  /** List a company's issues (used to discover pending approval requests).
+   * Tolerates array or { issues | data } envelope shapes. */
+  async listCompanyIssues(companyId: string): Promise<Array<Record<string, unknown>>> {
+    const raw = (await this.request('GET', `/companies/${companyId}/issues`)) as unknown;
+    return (
+      Array.isArray(raw)
+        ? raw
+        : ((raw as { issues?: unknown[] })?.issues ?? (raw as { data?: unknown[] })?.data ?? [])
+    ) as Array<Record<string, unknown>>;
   }
 
   async addComment(issueId: string, body: string): Promise<{ id: string }> {
