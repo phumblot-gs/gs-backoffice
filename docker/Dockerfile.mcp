@@ -8,6 +8,7 @@ COPY packages/core/package.json packages/core/
 COPY packages/evt-client/package.json packages/evt-client/
 COPY packages/jumpcloud-client/package.json packages/jumpcloud-client/
 COPY apps/mcp-server/package.json apps/mcp-server/
+COPY apps/notify-consumer/package.json apps/notify-consumer/
 COPY apps/evt-mock/package.json apps/evt-mock/
 RUN pnpm install --frozen-lockfile --prod=false
 
@@ -18,11 +19,13 @@ COPY packages/core/ packages/core/
 COPY packages/evt-client/ packages/evt-client/
 COPY packages/jumpcloud-client/ packages/jumpcloud-client/
 COPY apps/mcp-server/ apps/mcp-server/
+COPY apps/notify-consumer/ apps/notify-consumer/
 COPY tsconfig.base.json ./
 RUN pnpm --filter @gs-backoffice/core build \
   && pnpm --filter @gs-backoffice/evt-client build \
   && pnpm --filter @gs-backoffice/jumpcloud-client build \
-  && pnpm --filter @gs-backoffice/mcp-server build
+  && pnpm --filter @gs-backoffice/mcp-server build \
+  && pnpm --filter @gs-backoffice/notify-consumer build
 
 FROM base AS production
 WORKDIR /app

@@ -570,6 +570,7 @@ export class PaperclipPlugin implements ServicePlugin {
           {
             ticketId: input.ticketId,
             processCode: payload.processCode,
+            scope: payload.scope,
             decision: 'rejected',
             approver: context.userEmail,
             requestedBy: payload.requestedBy,
@@ -607,6 +608,7 @@ export class PaperclipPlugin implements ServicePlugin {
         {
           ticketId: input.ticketId,
           processCode: payload.processCode,
+          scope: payload.scope,
           decision: 'approved',
           approver: context.userEmail,
           requestedBy: payload.requestedBy,

@@ -23,6 +23,9 @@ resource "aws_secretsmanager_secret_version" "app" {
     CHIEF_OF_STAFF_AGENT_ID = "CHANGE_ME"
     JUMPCLOUD_API_KEY       = "CHANGE_ME"
     JUMPCLOUD_ORG_ID        = "CHANGE_ME"
+    # JSON map {scope: webhookUrl} consumed by the notify-consumer; "{}" = no
+    # channels yet (notifications are logged + skipped until populated).
+    GOOGLE_CHAT_WEBHOOKS = "{}"
   })
 
   lifecycle {

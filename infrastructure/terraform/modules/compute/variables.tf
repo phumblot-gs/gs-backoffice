@@ -95,3 +95,15 @@ variable "mcp_memory" {
   type        = number
   default     = 512
 }
+
+variable "notify_cpu" {
+  description = "CPU units for the notify-consumer task"
+  type        = number
+  default     = 256
+}
+
+variable "notify_memory" {
+  description = "Memory in MB for the notify-consumer task"
+  type        = number
+  default     = 512
+}
