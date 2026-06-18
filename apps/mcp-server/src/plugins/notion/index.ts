@@ -40,7 +40,17 @@ export class NotionPlugin implements ServicePlugin {
     if (!token) {
       this.logger.warn('NOTION_API_TOKEN not set — Notion plugin will return errors');
     }
-    this.client = new Client({ auth: token || undefined });
+    // Force the SDK to use Node's global fetch (undici) instead of its default
+    // node-fetch@2, which intermittently throws ERR_STREAM_PREMATURE_CLOSE on the
+    // Fargate→NAT egress path (works fine locally — it's egress-path specific).
+    // withRetry() below still covers genuine transient blips.
+    this.client = new Client({
+      auth: token || undefined,
+      fetch: ((url: string, init?: RequestInit) =>
+        fetch(url, init)) as unknown as NonNullable<
+        ConstructorParameters<typeof Client>[0]
+      >['fetch'],
+    });
 
     // Pre-warm cache at startup
     try {
