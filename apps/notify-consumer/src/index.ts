@@ -82,6 +82,39 @@ export function renderMessage(event: EvtEvent): { text: string; scope: string | 
   }
 }
 
+/**
+ * Pick the events to emit from a newest-first query page, given the last-seen
+ * timestamp and the set of already-processed ids, and return the advanced
+ * timestamp. The EVT query API only supports newest-first reads with a
+ * backward-pagination cursor (no forward tail, and `timeRange` 500s), so we tail
+ * by re-reading the head each interval and de-duplicating. On the first call
+ * (lastTs === null) it emits nothing and just establishes the baseline, so we
+ * never replay history on startup.
+ */
+export function selectFreshEvents(
+  newestFirst: EvtEvent[],
+  lastTs: string | null,
+  seen: Set<string>,
+): { fresh: EvtEvent[]; lastTs: string | null } {
+  const chronological = [...newestFirst].reverse();
+  if (lastTs === null) {
+    const newest = chronological.length
+      ? String(chronological[chronological.length - 1].timestamp ?? '')
+      : null;
+    return { fresh: [], lastTs: newest };
+  }
+  const fresh: EvtEvent[] = [];
+  let newLastTs = lastTs;
+  for (const e of chronological) {
+    const ts = String(e.timestamp ?? '');
+    if (e.eventId && seen.has(e.eventId)) continue; // already handled (boundary re-read)
+    if (ts && ts < lastTs) continue; // older than the baseline
+    fresh.push(e);
+    if (ts && ts > newLastTs) newLastTs = ts;
+  }
+  return { fresh, lastTs: newLastTs };
+}
+
 async function postToChat(url: string, text: string): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
@@ -141,17 +174,30 @@ async function main(): Promise<void> {
       'GOOGLE_CHAT_WEBHOOKS is empty — notifications will be logged and skipped until configured',
     );
   }
-  // In-memory dedup guards against the poll cursor re-emitting an event within a session.
+
+  // Tail the EVT head each interval (newest-first, filtered), de-duplicating by id.
+  const SEEN_MAX = 500;
+  let lastTs: string | null = null;
   const seen = new Set<string>();
-  for await (const event of client.poll({
-    filters: { eventTypes: SUBSCRIBED_EVENT_TYPES },
-    interval: POLL_INTERVAL,
-  })) {
-    if (event.eventId) {
-      if (seen.has(event.eventId)) continue;
-      seen.add(event.eventId);
+  for (;;) {
+    try {
+      const result = await client.query({
+        filters: { eventTypes: SUBSCRIBED_EVENT_TYPES },
+        limit: 50,
+      });
+      const selected = selectFreshEvents(result.events, lastTs, seen);
+      lastTs = selected.lastTs;
+      for (const event of selected.fresh) {
+        if (event.eventId) {
+          seen.add(event.eventId);
+          if (seen.size > SEEN_MAX) seen.delete(seen.values().next().value as string);
+        }
+        await handleEvent(event);
+      }
+    } catch (err) {
+      logger.error({ error: err }, 'EVT query failed — retrying next interval');
     }
-    await handleEvent(event);
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
   }
 }
 
