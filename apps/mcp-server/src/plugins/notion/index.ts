@@ -55,6 +55,44 @@ export class NotionPlugin implements ServicePlugin {
     return [this.askTool(), this.searchDocsTool()];
   }
 
+  /**
+   * Run a Notion SDK call with retry on transient transport failures.
+   * Notion's streaming responses intermittently drop the socket
+   * (ERR_STREAM_PREMATURE_CLOSE / ECONNRESET / fetch failed); a fresh request
+   * usually succeeds. Non-transient errors (auth, 404, validation) are not retried.
+   */
+  private async withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+    const maxAttempts = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const code = (err as { code?: string }).code ?? '';
+        const transient =
+          code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+          /premature close|ECONNRESET|socket hang up|fetch failed|terminated|ETIMEDOUT|EPIPE|network|aborted/i.test(
+            msg,
+          );
+        if (!transient || attempt === maxAttempts) throw err;
+        const delay = 250 * 2 ** (attempt - 1);
+        this.logger.warn({ attempt, label, err: msg, delay }, 'Notion call failed — retrying');
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
+  }
+
+  /** List a block's children with transient-failure retry (see withRetry). */
+  private async listChildren(blockId: string, pageSize: number) {
+    return this.withRetry(
+      () => this.client.blocks.children.list({ block_id: blockId, page_size: pageSize }),
+      `blocks.children.list ${blockId}`,
+    );
+  }
+
   private askTool(): PluginTool {
     return {
       name: 'henri_ask',
@@ -101,10 +139,7 @@ export class NotionPlugin implements ServicePlugin {
     }
 
     const pages: DocPage[] = [];
-    const sections = await this.client.blocks.children.list({
-      block_id: ROOT_PAGE_ID,
-      page_size: 100,
-    });
+    const sections = await this.listChildren(ROOT_PAGE_ID, 100);
 
     const sectionBlocks = sections.results.filter((b) => 'type' in b && b.type === 'child_page');
 
@@ -112,10 +147,7 @@ export class NotionPlugin implements ServicePlugin {
     const sectionResults = await Promise.all(
       sectionBlocks.map(async (block) => {
         const sectionTitle = 'child_page' in block ? block.child_page.title : 'Untitled';
-        const subPages = await this.client.blocks.children.list({
-          block_id: block.id,
-          page_size: 50,
-        });
+        const subPages = await this.listChildren(block.id, 50);
         return { block, sectionTitle, subPages };
       }),
     );
@@ -143,10 +175,7 @@ export class NotionPlugin implements ServicePlugin {
       return cached.text;
     }
 
-    const blocks = await this.client.blocks.children.list({
-      block_id: pageId,
-      page_size: 100,
-    });
+    const blocks = await this.listChildren(pageId, 100);
     const text = this.blocksToText(blocks.results);
     this.contentCache.set(pageId, { text, timestamp: Date.now() });
     return text;

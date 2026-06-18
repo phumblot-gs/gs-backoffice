@@ -144,6 +144,35 @@ export class PaperclipPlugin implements ServicePlugin {
     ) as Array<Record<string, unknown>>;
   }
 
+  /**
+   * Best-effort resolution of the GRA-x identifier of the issue Paperclip links to a
+   * freshly triggered run, so the employee gets a ticket id usable with henri_ticket_status.
+   * The link may not exist the instant the run is created, so poll briefly. Never throws —
+   * returns null and the caller falls back to surfacing the run id.
+   */
+  private async resolveLinkedTicket(routineId: string, runId: string): Promise<string | null> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const runs = await this.client.listRoutineRuns(routineId);
+        const run = runs.find((r) => String(r.id ?? r.runId ?? '') === runId);
+        const linkedId = run && (run.linkedIssueId ?? run.linked_issue_id ?? run.issueId);
+        if (linkedId) {
+          try {
+            const issue = await this.client.getIssue(String(linkedId));
+            const id = issue.identifier ?? issue.shortId ?? issue.id;
+            return id ? String(id) : null;
+          } catch {
+            return null;
+          }
+        }
+      } catch {
+        // Endpoint may be unavailable or the run not yet listed — fall through and retry.
+      }
+      await new Promise((r) => setTimeout(r, 750));
+    }
+    return null;
+  }
+
   /** A process code is allowed if the user has `*` or the code is in their allowlist. */
   private codeAllowed(code: string | null, allowed: string[]): boolean {
     if (!code) return false;
@@ -248,12 +277,18 @@ export class PaperclipPlugin implements ServicePlugin {
         variables: input.parameters,
         payload: { requestedBy: context.userEmail, notes: input.notes, processCode: code },
       });
-      const runId = run.id ?? run.runId ?? '(queued)';
+      const runId = String(run.id ?? run.runId ?? '');
+      // Surface the linked ticket id (GRA-x) so the employee can track it with
+      // henri_ticket_status; fall back to the run id if it hasn't linked yet.
+      const ticket = runId ? await this.resolveLinkedTicket(String(match.id), runId) : null;
+      const ref = ticket
+        ? `ticket **${ticket}** — track it with henri_ticket_status`
+        : `run **${runId || '(queued)'}** — the ticket will appear shortly in Paperclip`;
       return {
         content: [
           {
             type: 'text',
-            text: `Official process **${code}** (${String(match.title)}) triggered — run **${String(runId)}**. The assigned agent will handle it.`,
+            text: `Official process **${code}** (${String(match.title)}) triggered — ${ref}. The assigned agent will handle it.`,
           },
         ],
       };
