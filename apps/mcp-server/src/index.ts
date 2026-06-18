@@ -86,7 +86,11 @@ const jumpcloud =
 const rbacResolver = new RBACResolver(jumpcloud, rbacConfig, COMPANY_SLUG);
 
 // --- Initialize Plugin Manager ---
-const pluginManager = new PluginManager({ evtClient, environment: NODE_ENV });
+const pluginManager = new PluginManager({
+  evtClient,
+  environment: NODE_ENV,
+  evtAccountId: process.env.EVT_ACCOUNT_ID ?? '',
+});
 
 async function initializePlugins() {
   const credentials: Record<string, string> = {};
