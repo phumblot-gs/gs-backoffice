@@ -27,6 +27,11 @@ resource "aws_cloudwatch_log_group" "mcp" {
   retention_in_days = 30
 }
 
+resource "aws_cloudwatch_log_group" "notify" {
+  name              = "/ecs/${var.project_name}-${var.environment}/notify-consumer"
+  retention_in_days = 30
+}
+
 # -----------------------------------------------------------------------------
 # IAM — ECS Execution Role (pull images, read secrets, write logs)
 # -----------------------------------------------------------------------------
@@ -262,6 +267,52 @@ resource "aws_ecs_task_definition" "mcp" {
 }
 
 # -----------------------------------------------------------------------------
+# Task Definition — Notify Consumer (EVT → Google Chat). Reuses the MCP image
+# (same monorepo build) with a command override; no inbound port / no ALB.
+# -----------------------------------------------------------------------------
+resource "aws_ecs_task_definition" "notify" {
+  family                   = "${var.project_name}-${var.environment}-notify"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = var.notify_cpu
+  memory                   = var.notify_memory
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  container_definitions = jsonencode([{
+    name    = "notify-consumer"
+    image   = "${var.ecr_mcp_url}:${var.image_tag}"
+    command = ["node", "apps/notify-consumer/dist/index.js"]
+    environment = [
+      { name = "NODE_ENV", value = var.environment },
+    ]
+    secrets = [
+      {
+        name      = "EVT_API_URL"
+        valueFrom = "${var.app_secrets_arn}:EVT_API_URL::"
+      },
+      {
+        name      = "EVT_API_KEY"
+        valueFrom = "${var.app_secrets_arn}:EVT_API_KEY::"
+      },
+      {
+        name      = "GOOGLE_CHAT_WEBHOOKS"
+        valueFrom = "${var.app_secrets_arn}:GOOGLE_CHAT_WEBHOOKS::"
+      },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = aws_cloudwatch_log_group.notify.name
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "ecs"
+      }
+    }
+    essential = true
+  }])
+}
+
+# -----------------------------------------------------------------------------
 # ECS Services
 # -----------------------------------------------------------------------------
 resource "aws_ecs_service" "paperclip" {
@@ -310,4 +361,23 @@ resource "aws_ecs_service" "mcp" {
 
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+}
+
+resource "aws_ecs_service" "notify" {
+  name            = "notify-consumer"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.notify.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.ecs_security_group_id]
+    assign_public_ip = false
+  }
+
+  # Worker — no inbound traffic, so no load balancer. A brief gap on redeploy is
+  # acceptable for notifications (the consumer re-establishes its cursor at "now").
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
 }
