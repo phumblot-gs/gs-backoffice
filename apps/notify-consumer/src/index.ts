@@ -56,14 +56,22 @@ export function webhookForScope(
 export function renderMessage(event: EvtEvent): { text: string; scope: string | null } | null {
   const p = (event.payload ?? {}) as Record<string, unknown>;
   switch (event.eventType) {
-    case 'backoffice.approval.requested':
+    case 'backoffice.approval.requested': {
+      // Skip the PluginManager audit event (same type, no business payload).
+      if (!p.ticketId || !p.processCode) return null;
+      // Google Chat link syntax <url|label> renders a clickable "Ticket GRA-x".
+      const link = p.approveUrl ? `<${p.approveUrl}|Ticket ${p.ticketId}>` : `Ticket ${p.ticketId}`;
       return {
         scope: (p.scope as string) ?? null,
         text:
           `🔒 *Approval needed* — process \`${p.processCode}\` requested by ${p.requestedBy}.\n` +
-          `Review & decide: ${p.approveUrl}\n_Ticket ${p.ticketId}_`,
+          `Review & decide: ${link}`,
       };
+    }
     case 'backoffice.approval.decided': {
+      // Skip the PluginManager audit event (same type, no business payload) — this is
+      // what produced the "Approval undefined (undefined) …" artifact.
+      if (!p.ticketId || !p.decision) return null;
       const icon = p.decision === 'approved' ? '✅' : '⛔';
       return {
         scope: (p.scope as string) ?? null,
