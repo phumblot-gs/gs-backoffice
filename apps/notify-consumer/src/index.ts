@@ -52,20 +52,49 @@ export function webhookForScope(
   return null;
 }
 
-/** Render an EVT event into a Google Chat message, or null if it should be ignored. */
-export function renderMessage(event: EvtEvent): { text: string; scope: string | null } | null {
+export interface RenderedMessage {
+  scope: string | null;
+  /** A Google Chat message body — either { text } or { cardsV2 }. */
+  body: Record<string, unknown>;
+}
+
+/** Render an EVT event into a Google Chat message body, or null if it should be ignored. */
+export function renderMessage(event: EvtEvent): RenderedMessage | null {
   const p = (event.payload ?? {}) as Record<string, unknown>;
   switch (event.eventType) {
     case 'backoffice.approval.requested': {
       // Skip the PluginManager audit event (same type, no business payload).
       if (!p.ticketId || !p.processCode) return null;
-      // Google Chat link syntax <url|label> renders a clickable "Ticket GRA-x".
-      const link = p.approveUrl ? `<${p.approveUrl}|Ticket ${p.ticketId}>` : `Ticket ${p.ticketId}`;
+      // Use a card with a button: the <url|label> text syntax does not render
+      // reliably for long encoded URLs, and a button is the documented approach.
+      const widgets: Record<string, unknown>[] = [
+        { textParagraph: { text: `Requested by <b>${p.requestedBy}</b>` } },
+      ];
+      if (p.approveUrl) {
+        widgets.push({
+          buttonList: {
+            buttons: [
+              {
+                text: `Review ${p.ticketId}`,
+                onClick: { openLink: { url: String(p.approveUrl) } },
+              },
+            ],
+          },
+        });
+      }
       return {
         scope: (p.scope as string) ?? null,
-        text:
-          `🔒 *Approval needed* — process \`${p.processCode}\` requested by ${p.requestedBy}.\n` +
-          `Review & decide: ${link}`,
+        body: {
+          cardsV2: [
+            {
+              cardId: `approval-${p.ticketId}`,
+              card: {
+                header: { title: '🔒 Approval needed', subtitle: `Process: ${p.processCode}` },
+                sections: [{ widgets }],
+              },
+            },
+          ],
+        },
       };
     }
     case 'backoffice.approval.decided': {
@@ -75,15 +104,17 @@ export function renderMessage(event: EvtEvent): { text: string; scope: string | 
       const icon = p.decision === 'approved' ? '✅' : '⛔';
       return {
         scope: (p.scope as string) ?? null,
-        text:
-          `${icon} Approval *${p.ticketId}* (\`${p.processCode}\`) ${p.decision} by ${p.approver}.` +
-          (p.runTicket ? ` Running as ${p.runTicket}.` : ''),
+        body: {
+          text:
+            `${icon} Approval *${p.ticketId}* (\`${p.processCode}\`) ${p.decision} by ${p.approver}.` +
+            (p.runTicket ? ` Running as ${p.runTicket}.` : ''),
+        },
       };
     }
     case 'backoffice.notify.google_chat':
       // Generic passthrough: payload carries the message text + optional scope/channel.
       return typeof p.text === 'string'
-        ? { scope: (p.scope as string) ?? (p.channel as string) ?? null, text: p.text }
+        ? { scope: (p.scope as string) ?? (p.channel as string) ?? null, body: { text: p.text } }
         : null;
     default:
       return null;
@@ -123,11 +154,11 @@ export function selectFreshEvents(
   return { fresh, lastTs: newLastTs };
 }
 
-async function postToChat(url: string, text: string): Promise<void> {
+async function postToChat(url: string, body: Record<string, unknown>): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(
@@ -150,7 +181,7 @@ async function handleEvent(event: EvtEvent): Promise<void> {
     return;
   }
   try {
-    await postToChat(target.url, rendered.text);
+    await postToChat(target.url, rendered.body);
     logger.info(
       { eventId: event.eventId, eventType: event.eventType, channel: target.channel },
       'Notification posted to Google Chat',
