@@ -111,8 +111,24 @@ describe('renderMessage', () => {
     const m = renderMessage(e);
     expect(m?.scope).toBe('finance');
     expect(m?.text).toContain('pay-supplier');
-    expect(m?.text).toContain('https://claude.ai/new');
-    expect(m?.text).toContain('GRA-9');
+    // Clickable "Ticket GRA-9" via Google Chat <url|label> syntax, not a bare URL.
+    expect(m?.text).toContain('<https://claude.ai/new?q=...|Ticket GRA-9>');
+  });
+
+  it('ignores the audit event (same type, no business payload) for requested/decided', () => {
+    // PluginManager audit events reuse the tool's evtEventType with a {tool,input,isError} payload.
+    const auditReq: EvtEvent = {
+      ...base,
+      eventType: 'backoffice.approval.requested',
+      payload: { tool: 'henri_start_workflow', isError: false },
+    };
+    const auditDec: EvtEvent = {
+      ...base,
+      eventType: 'backoffice.approval.decided',
+      payload: { tool: 'henri_approve', input: { ticketId: 'GRA-8' }, isError: false },
+    };
+    expect(renderMessage(auditReq)).toBeNull();
+    expect(renderMessage(auditDec)).toBeNull();
   });
 
   it('renders an approved decision', () => {
