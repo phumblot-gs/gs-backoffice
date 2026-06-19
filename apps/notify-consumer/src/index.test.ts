@@ -110,9 +110,19 @@ describe('renderMessage', () => {
     };
     const m = renderMessage(e);
     expect(m?.scope).toBe('finance');
-    expect(m?.text).toContain('pay-supplier');
-    // Clickable "Ticket GRA-9" via Google Chat <url|label> syntax, not a bare URL.
-    expect(m?.text).toContain('<https://claude.ai/new?q=...|Ticket GRA-9>');
+    // Rendered as a card with a "Review GRA-9" button that opens the deep-link.
+    const card = (m?.body.cardsV2 as Array<{ card: Record<string, unknown> }>)[0].card as {
+      header: { subtitle: string };
+      sections: Array<{ widgets: Array<Record<string, unknown>> }>;
+    };
+    expect(card.header.subtitle).toContain('pay-supplier');
+    const button = (
+      card.sections[0].widgets.find((w) => 'buttonList' in w)!.buttonList as {
+        buttons: Array<{ text: string; onClick: { openLink: { url: string } } }>;
+      }
+    ).buttons[0];
+    expect(button.text).toBe('Review GRA-9');
+    expect(button.onClick.openLink.url).toBe('https://claude.ai/new?q=...');
   });
 
   it('ignores the audit event (same type, no business payload) for requested/decided', () => {
@@ -143,8 +153,8 @@ describe('renderMessage', () => {
         runTicket: 'GRA-10',
       },
     };
-    expect(renderMessage(e)?.text).toContain('✅');
-    expect(renderMessage(e)?.text).toContain('GRA-10');
+    expect(renderMessage(e)?.body.text).toContain('✅');
+    expect(renderMessage(e)?.body.text).toContain('GRA-10');
   });
 
   it('passes through a generic notify event', () => {
@@ -153,7 +163,7 @@ describe('renderMessage', () => {
       eventType: 'backoffice.notify.google_chat',
       payload: { text: 'hello world', scope: 'engineering' },
     };
-    expect(renderMessage(e)).toEqual({ text: 'hello world', scope: 'engineering' });
+    expect(renderMessage(e)).toEqual({ body: { text: 'hello world' }, scope: 'engineering' });
   });
 
   it('ignores unknown event types', () => {
