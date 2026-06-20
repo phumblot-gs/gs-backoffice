@@ -164,6 +164,10 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "ANTHROPIC_API_KEY"
         valueFrom = "${var.app_secrets_arn}:ANTHROPIC_API_KEY::"
       },
+      {
+        name      = "SPRITES_TOKEN"
+        valueFrom = "${var.app_secrets_arn}:SPRITES_TOKEN::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"

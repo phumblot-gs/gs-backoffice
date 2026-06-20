@@ -4,10 +4,33 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable
 
+# -----------------------------------------------------------------------------
+# Build the Fly Sprites sandbox-provider plugin and assemble a self-contained,
+# production-only copy at a STABLE path. Paperclip's local-path plugin install
+# references this path directly (no copy), and activation loads the worker from
+# it on every boot — so the files are versioned with the image and a one-time
+# `plugin install /opt/gs-plugins/plugin-fly-sprites` keeps it durable (record in
+# RDS), with no EFS and no entrypoint change.
+# -----------------------------------------------------------------------------
+FROM base AS plugin-build
+WORKDIR /repo
+COPY . .
+RUN pnpm install --frozen-lockfile --filter @gs-backoffice/sandbox-fly-sprites... \
+  && pnpm --filter @gs-backoffice/sandbox-fly-sprites build
+# Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
+RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
+  && cp -r packages/sandbox-fly-sprites/dist /opt/gs-plugins/plugin-fly-sprites/dist \
+  && cp packages/sandbox-fly-sprites/package.json /opt/gs-plugins/plugin-fly-sprites/package.json \
+  && cd /opt/gs-plugins/plugin-fly-sprites \
+  && npm install --omit=dev --no-package-lock
+
 FROM base AS production
 WORKDIR /app
 RUN npm install --global paperclipai@2026.609.0 @anthropic-ai/claude-code@latest
 RUN mkdir -p /paperclip && chown node:node /paperclip
+# Bake the self-contained plugin at a stable path (outside the instance plugins
+# dir, so Paperclip references it without managing/cleaning it).
+COPY --from=plugin-build --chown=node:node /opt/gs-plugins /opt/gs-plugins
 COPY --chown=node:node docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production

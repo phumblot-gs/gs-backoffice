@@ -26,6 +26,8 @@ resource "aws_secretsmanager_secret_version" "app" {
     # JSON map {scope: webhookUrl} consumed by the notify-consumer; "{}" = no
     # channels yet (notifications are logged + skipped until populated).
     GOOGLE_CHAT_WEBHOOKS = "{}"
+    # Fly Sprites API token (sprites.dev) for the sandbox-provider plugin.
+    SPRITES_TOKEN = "CHANGE_ME"
   })
 
   lifecycle {
