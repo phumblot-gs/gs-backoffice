@@ -1,0 +1,29 @@
+{
+  "name": "@gs-backoffice/sandbox-fly-sprites",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paperclip sandbox-provider plugin: runs agent code in Fly Sprites (Firecracker microVMs, EU).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.609.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}
