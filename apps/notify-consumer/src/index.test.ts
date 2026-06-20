@@ -77,20 +77,23 @@ describe('renderMessage', () => {
     expect(button.onClick.openLink.url).toBe('https://claude.ai/new?q=...');
   });
 
-  it('ignores the audit event (same type, no business payload) for requested/decided', () => {
-    // PluginManager audit events reuse the tool's evtEventType with a {tool,input,isError} payload.
-    const auditReq: EvtEvent = {
+  it('ignores audit events (dedicated type, not a business event)', () => {
+    // Audit events now use the dedicated backoffice.audit.tool_invoked type.
+    const audit: EvtEvent = {
       ...base,
-      eventType: 'backoffice.approval.requested',
-      payload: { tool: 'henri_start_workflow', isError: false },
+      eventType: 'backoffice.audit.tool_invoked',
+      payload: { tool: 'henri_approve', category: 'approval.decided', isError: false },
     };
-    const auditDec: EvtEvent = {
+    expect(renderMessage(audit)).toBeNull();
+  });
+
+  it('defensively skips a business event missing its payload (belt-and-suspenders)', () => {
+    const bad: EvtEvent = {
       ...base,
       eventType: 'backoffice.approval.decided',
-      payload: { tool: 'henri_approve', input: { ticketId: 'GRA-8' }, isError: false },
+      payload: { tool: 'henri_approve' },
     };
-    expect(renderMessage(auditReq)).toBeNull();
-    expect(renderMessage(auditDec)).toBeNull();
+    expect(renderMessage(bad)).toBeNull();
   });
 
   it('renders an approved decision', () => {

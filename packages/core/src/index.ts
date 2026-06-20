@@ -5,6 +5,7 @@ export {
   EvtActorSchema,
   EvtScopeSchema,
   BACKOFFICE_EVENT_TYPES,
+  AUDIT_TOOL_INVOKED,
   createBackofficeEvent,
   type EvtEvent,
   type EvtSource,
