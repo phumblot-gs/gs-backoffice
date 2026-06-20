@@ -145,12 +145,46 @@ Each evolution runs on its own `operator_branch`, disposable once its PR merges 
 - Enable **"Automatically delete head branches"** → GitHub deletes the branch on merge, zero accumulation (history preserved in `main` + the merged PR).
 - A lightweight **housekeeping routine** (Data-Officer-style heartbeat) deletes branches whose PR is closed/stale > N days, never touching `main`/`staging`/`production`.
 
-## 10. Execution setup (the hands-on configuration)
+## 10. Execution environment & sandbox isolation
 
-- **Project bound to the repo** — a Paperclip _project_ for `gs-backoffice` with `executionWorkspacePolicy = operator_branch` (each task = isolated branch workspace).
-- **Environment** — reuse **Local** (`driver: local`, on the Paperclip container; has `git` + `claude-code`). The repo must be cloneable + a **GitHub token** available for push + PR.
-- **Adapters** — `claude_local` for the build team (`ANTHROPIC_API_KEY`); **`grok_local` (xAI)** for the Auditor → needs the xAI API key.
-- **Agents** — Methods Officer / Engineer / QA / Security / Auditor with `adapterType`, `defaultEnvironmentId = Local`, `reportsTo`, instructions, `permissions`, budgets.
+Agents must execute code **in isolation**, never in the Paperclip container itself. The default **Local** environment (`driver: local`) runs ON the Paperclip ECS container, so a code agent there could read the container's plaintext secrets (incl. the `ANTHROPIC_API_KEY` the agent API returns in clear) — unacceptable. We therefore run agents in a **sandbox provider**.
+
+### Decision: Fly **Sprites** via a custom Paperclip sandbox-provider plugin
+
+- **Provider = Fly Sprites** (`sprites.dev`): Firecracker microVMs, EU regions (cdg/fra), hibernate-when-idle (0 idle cost) + instant wake + ~300ms checkpoints. Chosen for Fly's compliance package (**SOC 2 Type 2 report + pre-signed GDPR DPA**, Enterprise/NDA).
+- **No ready Paperclip plugin for Fly** (shipped providers = E2B/Cloudflare/Daytona/Modal/self-hosted-K8s), so we build a **custom `SandboxProvider` plugin** — confirmed feasible and bounded (see below).
+
+### The provider contract (confirmed in `@paperclipai/plugin-e2b`, v2026.609.0)
+
+A provider is a TS plugin (`@paperclipai/plugin-sdk`, `definePlugin`) built to `dist/{manifest.js,worker.js}`; `package.json` carries `paperclipPlugin:{manifest,worker}`. The manifest declares `environmentDrivers:[{driverKey:"fly-sprites", kind:"sandbox_provider", configSchema}]`, capability `environment.drivers.register`, and the API token as a `format:"secret-ref"` config field. The driver is **lease-based**; handlers and their Sprites mapping:
+
+| Paperclip handler               | Fly Sprites                                                                                   |
+| ------------------------------- | --------------------------------------------------------------------------------------------- |
+| `onEnvironmentValidateConfig`   | validate token/region/image                                                                   |
+| `onEnvironmentProbe`            | create + `pwd` + delete                                                                       |
+| `onEnvironmentAcquireLease`     | `PUT /v1/sprites/{id}` → `{providerLeaseId, metadata}`                                        |
+| `onEnvironmentResumeLease`      | reconnect by name (Sprites persist + hibernate — fits lease reuse better than E2B's pause)    |
+| `onEnvironmentReleaseLease`     | let it hibernate (reuse) or `DELETE`                                                          |
+| `onEnvironmentDestroyLease`     | `DELETE /v1/sprites/{id}`                                                                     |
+| `onEnvironmentRealizeWorkspace` | `mkdir -p` the cwd → `{cwd}`                                                                  |
+| `onEnvironmentExecute`          | `POST /v1/sprites/{id}/exec` (cwd/env/stdin/timeout) → `{exitCode, stdout, stderr, timedOut}` |
+
+**Repo/token are NOT the provider's concern.** `RealizeWorkspace` only ensures a working directory; the git clone + GitHub token happen via `onEnvironmentExecute` (the project's `setupCommand` + `env`) at the project/agent layer. So the Fly provider needs only exec + a cwd — no git knowledge.
+
+### Deploying a custom plugin on our (ephemeral) Fargate
+
+Plugins install globally per instance (`paperclipai plugin install`) into `~/.paperclip/instances/default/plugins/node_modules/` + a Postgres record. Runtime install is **not cloud-ready for ephemeral FS** — on Fargate the files vanish on redeploy. Confirmed durable approach (no private npm registry, no EFS):
+
+1. **Bake** the built plugin into `docker/Dockerfile.paperclip` at a vendored path (present in every fresh container).
+2. **Entrypoint** runs `paperclipai plugin install <local-path>` (local-path install **is supported**; idempotent) → persists the record in RDS, loads from the baked files.
+
+This matches our existing custom-`Dockerfile.paperclip` pattern.
+
+### The rest of the setup
+
+- **Project bound to the repo** — a Paperclip _project_ for `gs-backoffice`, workspace `sourceType: git_repo`, `repoUrl`, `defaultRef: main`, `executionWorkspacePreference: operator_branch`, `setupCommand` doing the authenticated clone + `pnpm install`.
+- **Adapters** — `claude_local` for the build team (`ANTHROPIC_API_KEY`); **`grok_local` (xAI)** for the Auditor.
+- **Agents** — Methods Officer / Engineer / QA / Security / Auditor with `adapterType`, `defaultEnvironmentId =` the Fly-Sprites environment, `reportsTo`, instructions, `permissions`, budgets. The GitHub token reaches the build via the agent/project `env` (consumed by `setupCommand`), never baked in code.
 - **Compliance registry** — `config/compliance-standards.json` + Notion mirror.
 
 ## 11. Open questions / prerequisites
@@ -158,18 +192,27 @@ Each evolution runs on its own `operator_branch`, disposable once its PR merges 
 1. **GitHub credential(s) for the agents** (CEO): the token is used by the **agents** to push branches + open PRs (not for merging — see item 2). Fine-grained, scope contents (push) + pull requests only. **Multiple tokens are supported**: store them as a **JSON map keyed by repo/project** (same pattern as `GOOGLE_CHAT_WEBHOOKS`), so each project/agent identity can use its own credential — useful for per-repo least privilege and for attributing agent commits/PRs to distinct bot identities. A dedicated machine user or GitHub App is the cleaner long-term identity; a fine-grained PAT is fine to start. One token per repo is the default; gs-backoffice needs one to begin.
 2. **Requester merges with their own GitHub account** (no token): the Gate-3 merge is performed by the human requester in their browser via the PR link — so they must have **repo write access** and count as the required reviewer under branch protection. The agent token is never used to merge.
 3. **Auditor LLM**: **`grok_local` (xAI)** — provide the xAI API key.
-4. **Repo availability + headroom** in the Local env (clones, Claude Code, test runs; load tests may need a separate runner).
-5. **Test tooling**: load-test + pentest tooling runnable from the env (or delegated) for High/Critical.
+4. **Fly side (vendor confirmations, in parallel)**: Fly **Enterprise plan** to obtain the SOC 2 report + activate the DPA; confirm **Sprites EU region pinning** (cdg/fra) and the `@fly/sprites` SDK create-with-region/image; confirm the compliance package covers **Sprites** specifically.
+5. **Test tooling**: load-test + pentest tooling runnable in the sandbox image (or delegated) for High/Critical.
 6. **Registry mechanics**: confirm the issue flag/label + cross-project query; decide whether within-repo releases stay ordered or move to feature flags.
 7. **Criticality registry content**: finalize levels + mandated standards with the CEO.
 
+_Resolved during scoping (Steps 0 / 0.5, 2026-06-20):_ the sandbox-provider contract is complete and usable in 2026.609.0; the repo/token flow is not a provider concern (exec + setupCommand); a custom plugin deploys durably on Fargate via bake-into-image + idempotent local-path `plugin install` (no private registry, no EFS).
+
 ## 12. Phased build plan
 
-- **Phase A — Proof of concept (de-risk execution)**: project bound to gs-backoffice + GitHub token + one **Methods Officer** (`claude_local`, operator_branch). Trivial task → branch → edit → push → **open a PR**. Validates the one uncertain piece end-to-end.
+- **Phase A — Proof of concept (de-risk execution)** — concrete sequence:
+  - **A1. Scaffold the Fly Sprites provider plugin** — a new package `packages/plugins/sandbox-fly-sprites` (TS, `@paperclipai/plugin-sdk`, `definePlugin`), manifest declaring the `fly-sprites` `sandbox_provider` driver + `SPRITES_TOKEN` as `secret-ref` + `region`/`image` config. Unit-test the pure bits.
+  - **A2. Implement the lease lifecycle** against the Sprites API/SDK: `validateConfig`, `probe`, `acquireLease` (create), `execute` (exec + stdin staging), `realizeWorkspace` (mkdir), `resumeLease`/`releaseLease` (hibernate) and `destroyLease` (delete).
+  - **A3. Deploy path** — bake the built plugin into `docker/Dockerfile.paperclip`; entrypoint `paperclipai plugin install <local-path>` (idempotent). Verify on staging that the `fly-sprites` driver appears in `environments/capabilities`.
+  - **A4. Create the Fly-Sprites environment** (EU region) + a **project** bound to `gs-backoffice` (`git_repo`, `operator_branch`, authenticated `setupCommand`). Store `SPRITES_TOKEN` as a Paperclip secret.
+  - **A5. One Methods Officer agent** (`claude_local`, `defaultEnvironmentId =` the Fly env, capped `maxTurnsPerRun`, budget) — auto-approval is now safe because it runs **inside the sandbox**, not on the Paperclip container.
+  - **A6. PoC task** — assign a trivial issue ("add a comment to the README"); observe **branch → edit → push → open a PR**. Success = a real (throwaway) PR opened by the agent; merge stays manual.
+  - Validates the whole uncertain chain (provider ↔ sandbox ↔ repo/token ↔ PR) end-to-end before building Phases B–D.
 - **Phase B — Plan, criteria, decomposition, audit**: planning mode; structured plan + criticality + criteria from the registry; CEO accepts → child issues to Engineer/Security; evidence as work-products; **independent Auditor** (different adapter); Gate 2.
 - **Phase C — Merge-by-requester + CI/CD + recette + housekeeping**: Chat push to the requester with a PR button (Gate 3); CI→Paperclip public trigger after staging deploy; QA/Recette agent + executable cahier; Gate 4 auditor-verified recette; auto-delete + stale-branch housekeeping.
 - **Phase D — Release registry + intake**: production-ready registry (record/list/short description) + `deploy-to-production (...)` per-evolution routine; `request-evolution (...)` intake process; gate notifications to Chat.
 
 ## 13. Why this stays on the Paperclip standard
 
-No bespoke orchestration engine: native agents + hierarchy, native planning / plan-acceptance / child-issue decomposition, native `claude_local` (+ a second native adapter for the auditor), native environments/workspaces, native git `operator_branch`, native work-products for evidence, native public triggers for the CI hand-off, native issues/labels for the release registry. Our only custom code is the _intake_ (an official process), the _compliance registry_ (config + Notion), the _executable recette suites_, the _release registry tool/routine_, and the _notifications_ (already built). The loop is an **assembly of Paperclip primitives**, not a parallel system.
+No bespoke orchestration engine: native agents + hierarchy, native planning / plan-acceptance / child-issue decomposition, native `claude_local` (+ a second native adapter for the auditor), native environments/workspaces, native git `operator_branch`, native work-products for evidence, native public triggers for the CI hand-off, native issues/labels for the release registry. Our only custom code is the _intake_ (an official process), the _compliance registry_ (config + Notion), the _executable recette suites_, the _release registry tool/routine_, the _notifications_ (already built), and the _Fly Sprites sandbox-provider plugin_ (modelled on the first-party providers, using Paperclip's own plugin SDK + driver contract). The loop is an **assembly of Paperclip primitives**, not a parallel system.
