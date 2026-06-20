@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import WebSocketImpl from 'ws';
 import { definePlugin } from '@paperclipai/plugin-sdk';
 import type {
   PluginEnvironmentAcquireLeaseParams,
@@ -15,18 +16,58 @@ import type {
   PluginEnvironmentValidateConfigParams,
   PluginEnvironmentValidationResult,
 } from '@paperclipai/plugin-sdk';
+import { SpritesClient, Sprite, ExecError } from '@fly/sprites';
 import { parseDriverConfig, resolveApiKey, type SpriteDriverConfig } from './config.js';
 import { buildLoginShellScript } from './shell.js';
-import { SpritesClient } from './sprites-client.js';
+
+// The Sprites SDK uses the global WebSocket (native on Node 22, which the Paperclip
+// runtime uses). Polyfill from `ws` defensively so the provider also works if the
+// worker runs on an older Node.
+const g = globalThis as { WebSocket?: unknown };
+if (!g.WebSocket) g.WebSocket = WebSocketImpl;
 
 const DEFAULT_REMOTE_CWD = '/home/paperclip-workspace';
 
 function clientFor(config: SpriteDriverConfig): SpritesClient {
-  return new SpritesClient({ token: resolveApiKey(config) });
+  return new SpritesClient(resolveApiKey(config), { timeout: 60_000 });
 }
 
 function spriteName(): string {
   return `paperclip-${randomUUID()}`;
+}
+
+interface ExecOutcome {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+/**
+ * Run a shell script in the Sprite via `sh -c`. The SDK's exec/execFile throw
+ * ExecError on a non-zero exit (like child_process), so we catch it and return
+ * the captured exit code + streams rather than throwing.
+ */
+async function runScript(sprite: Sprite, script: string): Promise<ExecOutcome> {
+  try {
+    const r = await sprite.execFile('sh', ['-c', script]);
+    return {
+      exitCode: r.exitCode,
+      stdout: String(r.stdout),
+      stderr: String(r.stderr),
+      timedOut: false,
+    };
+  } catch (error) {
+    if (error instanceof ExecError) {
+      return {
+        exitCode: error.exitCode,
+        stdout: String(error.stdout),
+        stderr: String(error.stderr),
+        timedOut: false,
+      };
+    }
+    throw error;
+  }
 }
 
 function leaseMetadata(input: {
@@ -39,7 +80,6 @@ function leaseMetadata(input: {
     provider: 'fly-sprites',
     shellCommand: 'bash',
     region: input.config.region,
-    image: input.config.image,
     reuseLease: input.config.reuseLease,
     spriteName: input.name,
     remoteCwd: input.remoteCwd,
@@ -47,17 +87,8 @@ function leaseMetadata(input: {
   };
 }
 
-async function ensureWorkspace(
-  client: SpritesClient,
-  name: string,
-  remoteCwd: string,
-  timeoutMs: number,
-): Promise<void> {
-  await client.exec(
-    name,
-    buildLoginShellScript({ command: 'mkdir', args: ['-p', remoteCwd] }),
-    timeoutMs,
-  );
+async function ensureWorkspace(sprite: Sprite, remoteCwd: string): Promise<void> {
+  await runScript(sprite, buildLoginShellScript({ command: 'mkdir', args: ['-p', remoteCwd] }));
 }
 
 const plugin = definePlugin({
@@ -91,16 +122,19 @@ const plugin = definePlugin({
     const client = clientFor(config);
     const name = spriteName();
     try {
-      await client.createSprite(name, { image: config.image, region: config.region });
-      const result = await client.exec(
-        name,
-        buildLoginShellScript({ command: 'pwd' }),
-        config.timeoutMs,
-      );
+      const sprite = await client.createSprite(name, { region: config.region });
+      const result = await runScript(sprite, buildLoginShellScript({ command: 'pwd' }));
       return {
         ok: result.exitCode === 0,
-        summary: `Provisioned a Fly Sprite in ${config.region}.`,
-        metadata: { provider: 'fly-sprites', region: config.region, image: config.image },
+        summary:
+          result.exitCode === 0
+            ? `Provisioned a Fly Sprite in ${config.region} and ran a command.`
+            : `Provisioned a Fly Sprite in ${config.region} but the probe command failed (exit ${result.exitCode}).`,
+        metadata: {
+          provider: 'fly-sprites',
+          region: config.region,
+          stderr: result.stderr.slice(0, 500),
+        },
       };
     } catch (error) {
       return {
@@ -113,7 +147,7 @@ const plugin = definePlugin({
         },
       };
     } finally {
-      await client.destroySprite(name).catch(() => undefined);
+      await client.deleteSprite(name).catch(() => undefined);
     }
   },
 
@@ -124,15 +158,15 @@ const plugin = definePlugin({
     const client = clientFor(config);
     const name = spriteName();
     try {
-      await client.createSprite(name, { image: config.image, region: config.region });
+      const sprite = await client.createSprite(name, { region: config.region });
       const remoteCwd = DEFAULT_REMOTE_CWD;
-      await ensureWorkspace(client, name, remoteCwd, config.timeoutMs);
+      await ensureWorkspace(sprite, remoteCwd);
       return {
         providerLeaseId: name,
         metadata: leaseMetadata({ config, name, remoteCwd, resumed: false }),
       };
     } catch (error) {
-      await client.destroySprite(name).catch(() => undefined);
+      await client.deleteSprite(name).catch(() => undefined);
       throw error;
     }
   },
@@ -143,10 +177,14 @@ const plugin = definePlugin({
     if (!params.providerLeaseId) return { providerLeaseId: null, metadata: { expired: true } };
     const config = parseDriverConfig(params.config);
     const client = clientFor(config);
-    const sprite = await client.getSprite(params.providerLeaseId);
-    if (!sprite) return { providerLeaseId: null, metadata: { expired: true } };
+    let sprite: Sprite;
+    try {
+      sprite = await client.getSprite(params.providerLeaseId);
+    } catch {
+      return { providerLeaseId: null, metadata: { expired: true } };
+    }
     const remoteCwd = DEFAULT_REMOTE_CWD;
-    await ensureWorkspace(client, params.providerLeaseId, remoteCwd, config.timeoutMs);
+    await ensureWorkspace(sprite, remoteCwd);
     return {
       providerLeaseId: params.providerLeaseId,
       metadata: leaseMetadata({ config, name: params.providerLeaseId, remoteCwd, resumed: true }),
@@ -159,7 +197,7 @@ const plugin = definePlugin({
     // Reuse: leave the Sprite to hibernate (0 idle cost, instant wake on resume).
     if (config.reuseLease) return;
     await clientFor(config)
-      .destroySprite(params.providerLeaseId)
+      .deleteSprite(params.providerLeaseId)
       .catch(() => undefined);
   },
 
@@ -167,7 +205,7 @@ const plugin = definePlugin({
     if (!params.providerLeaseId) return;
     const config = parseDriverConfig(params.config);
     await clientFor(config)
-      .destroySprite(params.providerLeaseId)
+      .deleteSprite(params.providerLeaseId)
       .catch(() => undefined);
   },
 
@@ -181,12 +219,8 @@ const plugin = definePlugin({
       params.workspace.localPath ||
       DEFAULT_REMOTE_CWD;
     if (params.lease.providerLeaseId) {
-      await ensureWorkspace(
-        clientFor(config),
-        params.lease.providerLeaseId,
-        remoteCwd,
-        config.timeoutMs,
-      );
+      const sprite = clientFor(config).sprite(params.lease.providerLeaseId);
+      await ensureWorkspace(sprite, remoteCwd);
     }
     return { cwd: remoteCwd, metadata: { provider: 'fly-sprites', remoteCwd } };
   },
@@ -203,18 +237,14 @@ const plugin = definePlugin({
       };
     }
     const config = parseDriverConfig(params.config);
-    const client = clientFor(config);
+    const sprite = clientFor(config).sprite(params.lease.providerLeaseId);
     const script = buildLoginShellScript({
       command: params.command,
       args: params.args ?? [],
       env: params.env,
       cwd: params.cwd,
     });
-    const result = await client.exec(
-      params.lease.providerLeaseId,
-      script,
-      params.timeoutMs ?? config.timeoutMs,
-    );
+    const result = await runScript(sprite, script);
     return {
       exitCode: result.exitCode,
       timedOut: result.timedOut,
