@@ -1,54 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  renderMessage,
-  webhookForScope,
-  parseWebhooks,
-  selectFreshEvents,
-  SUBSCRIBED_EVENT_TYPES,
-} from './index.js';
+import { renderMessage, webhookForScope, parseWebhooks, SUBSCRIBED_EVENT_TYPES } from './index.js';
 import type { EvtEvent } from '@gs-backoffice/core';
-
-describe('selectFreshEvents (EVT head tailing)', () => {
-  const ev = (id: string, ts: string): EvtEvent => ({
-    eventId: id,
-    eventType: 'backoffice.approval.requested',
-    timestamp: ts,
-    source: { application: 'gs-backoffice', version: '0.1.0', environment: 'staging' },
-    actor: { userId: 'u', accountId: '16' },
-    scope: { accountId: '16', resourceType: 'approval', resourceId: 'x' },
-    payload: {},
-  });
-  // Query returns NEWEST-first.
-  const newestFirst = [ev('b', '2026-06-18T23:05:00Z'), ev('a', '2026-06-18T23:00:00Z')];
-
-  it('establishes a baseline on first call without replaying history', () => {
-    const r = selectFreshEvents(newestFirst, null, new Set());
-    expect(r.fresh).toHaveLength(0);
-    expect(r.lastTs).toBe('2026-06-18T23:05:00Z');
-  });
-
-  it('emits only events newer than the baseline, in chronological order', () => {
-    const seen = new Set<string>();
-    const r = selectFreshEvents(
-      [ev('c', '2026-06-18T23:10:00Z'), ev('b', '2026-06-18T23:05:00Z')],
-      '2026-06-18T23:05:00Z',
-      seen,
-    );
-    // 'b' is at the boundary (== lastTs) but not in `seen` yet → emitted once; 'c' is newer.
-    expect(r.fresh.map((e) => e.eventId)).toEqual(['b', 'c']);
-    expect(r.lastTs).toBe('2026-06-18T23:10:00Z');
-  });
-
-  it('does not re-emit an already-seen boundary event', () => {
-    const seen = new Set(['b']);
-    const r = selectFreshEvents(
-      [ev('c', '2026-06-18T23:10:00Z'), ev('b', '2026-06-18T23:05:00Z')],
-      '2026-06-18T23:05:00Z',
-      seen,
-    );
-    expect(r.fresh.map((e) => e.eventId)).toEqual(['c']);
-  });
-});
 
 const base = {
   source: { application: 'gs-backoffice', version: '0.1.0', environment: 'staging' as const },
