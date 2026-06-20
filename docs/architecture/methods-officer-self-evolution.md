@@ -6,20 +6,20 @@
 
 Paperclip is a "virtual company" of agents that **plan, decompose, delegate, and execute code**. Every step maps to a native primitive (verified against the live staging Paperclip OpenAPI + API, `paperclipai@2026.609.0`):
 
-| Need | Native Paperclip primitive |
-| --- | --- |
-| Agent hierarchy (CEO → Methods Officer → specialists) | Agents with `role` + `reportsTo` |
-| Specialized sub-agents | Roles `cto`, `engineer`, `security` (+ custom `title`) |
-| Independent auditor on a **different LLM** | A second agent on a different **adapter** (`codex_local`, `gemini_local`, `grok_local`) instead of `claude_local` |
-| "Evaluate then plan" with acceptance criteria | Issue `workMode: planning` → plan revisions; `acceptanceCriteria` |
-| CEO validates the plan → spawn the work | `POST /issues/{id}/accepted-plan-decompositions {acceptedPlanRevisionId, children[]}` |
-| Sub-tasks assigned to specialists | `POST /issues/{id}/children` (`assigneeAgentId`, `acceptanceCriteria`, `blockParentUntilDone`) |
-| Run code (impl, tests) | Adapter **`claude_local`** in an **environment**; **execution-workspaces** |
-| Work on a branch → PR | `executionWorkspacePreference: operator_branch` |
-| Evidence (tests, audit, recette) | Issue **work-products** + **documents** |
-| Notify the requester / route gates to Chat | EVT events + the **EVT→Google Chat consumer** (already live, with action buttons) |
-| CI / staging deploy → drive the next step | GitHub Actions + Paperclip **public routine triggers** (`/routine-triggers/public/{id}/fire`) |
-| Production-ready registry & per-evolution release | Issues flagged "ready-for-production" (queryable) + a `deploy-to-production (...)` routine |
+| Need                                                  | Native Paperclip primitive                                                                                        |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Agent hierarchy (CEO → Methods Officer → specialists) | Agents with `role` + `reportsTo`                                                                                  |
+| Specialized sub-agents                                | Roles `cto`, `engineer`, `security` (+ custom `title`)                                                            |
+| Independent auditor on a **different LLM**            | A second agent on a different **adapter** (`codex_local`, `gemini_local`, `grok_local`) instead of `claude_local` |
+| "Evaluate then plan" with acceptance criteria         | Issue `workMode: planning` → plan revisions; `acceptanceCriteria`                                                 |
+| CEO validates the plan → spawn the work               | `POST /issues/{id}/accepted-plan-decompositions {acceptedPlanRevisionId, children[]}`                             |
+| Sub-tasks assigned to specialists                     | `POST /issues/{id}/children` (`assigneeAgentId`, `acceptanceCriteria`, `blockParentUntilDone`)                    |
+| Run code (impl, tests)                                | Adapter **`claude_local`** in an **environment**; **execution-workspaces**                                        |
+| Work on a branch → PR                                 | `executionWorkspacePreference: operator_branch`                                                                   |
+| Evidence (tests, audit, recette)                      | Issue **work-products** + **documents**                                                                           |
+| Notify the requester / route gates to Chat            | EVT events + the **EVT→Google Chat consumer** (already live, with action buttons)                                 |
+| CI / staging deploy → drive the next step             | GitHub Actions + Paperclip **public routine triggers** (`/routine-triggers/public/{id}/fire`)                     |
+| Production-ready registry & per-evolution release     | Issues flagged "ready-for-production" (queryable) + a `deploy-to-production (...)` routine                        |
 
 The Paperclip image ships `git` + `@anthropic-ai/claude-code`; installed adapters include `claude_local`, `codex_local`, `cursor`, `gemini_local`, `grok_local`, … The company has one agent (**CEO**) and one environment (**Local**, `driver: local`, default).
 
@@ -40,12 +40,12 @@ The **Auditor reports to the CEO, not the Methods Officer**, and runs on a **dif
 
 Acceptance criteria are **derived from a registry**, not invented per request. The Methods Officer proposes a criticality; the CEO confirms/overrides it at Gate 1; the level mandates a fixed set of criteria.
 
-| Criticality | Examples | Mandatory standards |
-| --- | --- | --- |
-| **Low** | docs, copy, internal tooling | unit tests on touched code; CI green; light audit |
-| **Medium** | new MCP tool, non-sensitive feature | unit+integration ≥ 70% coverage on touched packages; CI green; auditor; staging recette |
-| **High** | RBAC / auth / data access / billing | + mandatory security review + pentest of changed surface + performance budget (p95) + SOC 2 control mapping |
-| **Critical** | infra/IaC, secrets, tenant isolation, prod data | + load test + human security sign-off + change-management evidence |
+| Criticality  | Examples                                        | Mandatory standards                                                                                         |
+| ------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Low**      | docs, copy, internal tooling                    | unit tests on touched code; CI green; light audit                                                           |
+| **Medium**   | new MCP tool, non-sensitive feature             | unit+integration ≥ 70% coverage on touched packages; CI green; auditor; staging recette                     |
+| **High**     | RBAC / auth / data access / billing             | + mandatory security review + pentest of changed surface + performance budget (p95) + SOC 2 control mapping |
+| **Critical** | infra/IaC, secrets, tenant isolation, prod data | + load test + human security sign-off + change-management evidence                                          |
 
 - **Source of truth**: git-versioned `config/compliance-standards.json` (PR-reviewed → control changes are auditable), mirrored to a Notion database the Methods Officer maintains.
 - **Machine-checkable wherever possible** (coverage %, p95 ms, pentest yes/no) so evidence is objective.
@@ -53,7 +53,7 @@ Acceptance criteria are **derived from a registry**, not invented per request. T
 ## 4. Lifecycle (mapped to the API)
 
 1. **Evolution request** — an Issue is created (via `henri_start_workflow` on a `request-evolution (...)` routine), assigned to the **Methods Officer**, `workMode: planning`. The **requester's identity is carried on the issue** (needed at Gate 3).
-2. **Feasibility + plan + acceptance criteria** — the Methods Officer produces a **plan revision**: sections *Architecture · Code · Secrets · Security · Performance & load · Documentation*, a proposed **criticality**, the **acceptance criteria** (from the registry), **and a staging cahier de recette** (steps + expected behavior). No code yet.
+2. **Feasibility + plan + acceptance criteria** — the Methods Officer produces a **plan revision**: sections _Architecture · Code · Secrets · Security · Performance & load · Documentation_, a proposed **criticality**, the **acceptance criteria** (from the registry), **and a staging cahier de recette** (steps + expected behavior). No code yet.
 3. **Gate 1 — CEO validates the plan** → `accepted-plan-decompositions` spawns child issues to the specialists (`acceptanceCriteria`, `blockParentUntilDone`, `operator_branch`).
 4. **Execution + evidence** — sub-agents implement on isolated branches (`claude_local`) and run the required tests (unit, integration, E2E, + load/pentest per criticality). Results are stored as **work-products on the issue** (durable, reviewable).
 5. **Gate 2 — pre-PR authorization (CEO)** — before any PR exists, the CEO must see that (a) the **evidence exists** and **meets every acceptance criterion**; (b) the **independent Auditor** (different LLM) attests **all steps followed**, **criteria genuinely met**, and the **code is sincere** (no gamed/weakened/skipped tests, hardcoded expected values, disabled checks, back-doors, secrets, hidden scope); (c) the **cahier de recette** is delivered. Then the CEO authorizes **PR creation**.
@@ -79,33 +79,34 @@ Cross-cutting: per-agent `permissions` + budgets; least-privilege GitHub credent
 The loop is wired through EVT events: each step emits one, the audit trail records every tool call, and the EVT→Google Chat consumer turns the human-facing ones into notifications. Two hard rules keep the bus clean (see [[reference_evt_queues]] for the queue contract):
 
 **Convention — audit vs business.**
+
 - **Audit events** are emitted automatically for every audited MCP tool call under a **single dedicated type** `backoffice.audit.tool_invoked` (core const `AUDIT_TOOL_INVOKED`), payload `{tool, category, input, isError, userEmail}` where `category` is the action (e.g. `knowledge.query`, `approval.decided`). They are **also always written to CloudWatch** (`audit_event` log line) independently of EVT (SOC 2 CC7 durable trail). They are NEVER published under a business type.
 - **Business events** are published **explicitly** by the emitting plugin/agent under `backoffice.<domain>.<action>` types, with a rich, purpose-built payload.
 - **Consumers subscribe by type** through a server-side-filtered EVT queue (the `notify-consumer` pattern), so audit noise never reaches a business consumer, and no event is missed regardless of the shared product-stream volume.
 
 **Emitted today.**
 
-| Event type | Kind | Payload (key fields) | Emitter |
-| --- | --- | --- | --- |
-| `backoffice.audit.tool_invoked` | audit | `{tool, category, input, isError, userEmail}` | PluginManager, for any tool with an `auditCategory` |
-| `backoffice.approval.requested` | business | `{ticketId, processCode, scope, requestedBy, approveUrl}` | approval gate (`henri_start_workflow` on a sensitive process) |
-| `backoffice.approval.decided` | business | `{ticketId, processCode, scope, decision, approver, requestedBy, runTicket}` | approval gate (`henri_approve`) |
+| Event type                      | Kind     | Payload (key fields)                                                         | Emitter                                                       |
+| ------------------------------- | -------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `backoffice.audit.tool_invoked` | audit    | `{tool, category, input, isError, userEmail}`                                | PluginManager, for any tool with an `auditCategory`           |
+| `backoffice.approval.requested` | business | `{ticketId, processCode, scope, requestedBy, approveUrl}`                    | approval gate (`henri_start_workflow` on a sensitive process) |
+| `backoffice.approval.decided`   | business | `{ticketId, processCode, scope, decision, approver, requestedBy, runTicket}` | approval gate (`henri_approve`)                               |
 
 `actor` = `{userId, accountId, role}` and `scope` = `{accountId, resourceType, resourceId}` on every event. The `notify-consumer` queue (`backoffice-notify`) filters on the business types only.
 
 **To add for the self-evolution loop** (business events, published explicitly; the notify-consumer subscribes to the human-facing ones and routes by `payload.scope`). `<id>` = evolution issue id; `scope` routes Chat to the requester/team.
 
-| Event type | Step / gate | Payload (key fields) | → Chat |
-| --- | --- | --- | --- |
-| `backoffice.evolution.requested` | 1 intake | `{evolutionId, requestedBy, title}` | — |
-| `backoffice.evolution.plan_ready` | 2 → Gate 1 | `{evolutionId, criticality, planRevisionId}` | CEO |
-| `backoffice.evolution.plan_accepted` / `.plan_rejected` | Gate 1 | `{evolutionId, decidedBy, reason?}` | requester |
-| `backoffice.evolution.audit_completed` | Gate 2 | `{evolutionId, verdict, criteriaMet, sincere, reportUrl}` | CEO |
-| `backoffice.evolution.pr_ready` | Gate 3 | `{evolutionId, requestedBy, prUrl, evidenceUrl, auditReportUrl}` | requester |
-| `backoffice.evolution.merged` / `.merge_rejected` | Gate 3 | `{evolutionId, by, prUrl, reason?}` | requester + Methods Officer |
-| `backoffice.evolution.recette_passed` / `.recette_failed` | Gate 4 | `{evolutionId, verifiedBy, details}` | CEO (+ Methods Officer on fail) |
-| `backoffice.evolution.ready_for_production` | 10 registry | `{evolutionId, shortDescription, project}` | CEO |
-| `backoffice.evolution.deployed` | 11 release | `{evolutionId, project, includedEvolutionIds}` | requester + CEO |
+| Event type                                                | Step / gate | Payload (key fields)                                             | → Chat                          |
+| --------------------------------------------------------- | ----------- | ---------------------------------------------------------------- | ------------------------------- |
+| `backoffice.evolution.requested`                          | 1 intake    | `{evolutionId, requestedBy, title}`                              | —                               |
+| `backoffice.evolution.plan_ready`                         | 2 → Gate 1  | `{evolutionId, criticality, planRevisionId}`                     | CEO                             |
+| `backoffice.evolution.plan_accepted` / `.plan_rejected`   | Gate 1      | `{evolutionId, decidedBy, reason?}`                              | requester                       |
+| `backoffice.evolution.audit_completed`                    | Gate 2      | `{evolutionId, verdict, criteriaMet, sincere, reportUrl}`        | CEO                             |
+| `backoffice.evolution.pr_ready`                           | Gate 3      | `{evolutionId, requestedBy, prUrl, evidenceUrl, auditReportUrl}` | requester                       |
+| `backoffice.evolution.merged` / `.merge_rejected`         | Gate 3      | `{evolutionId, by, prUrl, reason?}`                              | requester + Methods Officer     |
+| `backoffice.evolution.recette_passed` / `.recette_failed` | Gate 4      | `{evolutionId, verifiedBy, details}`                             | CEO (+ Methods Officer on fail) |
+| `backoffice.evolution.ready_for_production`               | 10 registry | `{evolutionId, shortDescription, project}`                       | CEO                             |
+| `backoffice.evolution.deployed`                           | 11 release  | `{evolutionId, project, includedEvolutionIds}`                   | requester + CEO                 |
 
 New business types are added to `BACKOFFICE_EVENT_TYPES` in `packages/core`, to the notify-consumer's `SUBSCRIBED_EVENT_TYPES`, and to the `backoffice-notify` queue filter; rendering for each is added to the consumer's `renderMessage`.
 
@@ -116,6 +117,7 @@ New business types are added to `BACKOFFICE_EVENT_TYPES` in `packages/core`, to 
 **Per-evolution release routine.** A `deploy-to-production (...)` official process takes one ready evolution and triggers its production deployment, behind the existing `deploy-production.yml` approval gate. Listing + choosing + triggering one at a time is straightforward.
 
 **Honest constraint on "independently of each other".** Our deploy model is trunk-based: `main` → `staging` branch → `production` branch deploys a **whole snapshot**, not a cherry-picked subset. So:
+
 - **Across projects/repos**: naturally independent (separate pipelines) — full independence.
 - **Within one repo**: evolutions merge to `main` in sequence. "Deploy evolution X" promotes `main` up to X's merge commit — you control **timing and order**, not an arbitrary subset (you can't ship a later evolution while holding back an earlier one it sits on top of).
 - **For true per-evolution independence within a repo**: ship behind **feature flags** (merge + deploy dark; "deploy to production" = flip the flag). Powerful but heavier — propose only if the need is real.
@@ -127,22 +129,25 @@ New business types are added to `BACKOFFICE_EVENT_TYPES` in `packages/core`, to 
 ## 8. CI/CD integration & staging recette (answers A & B)
 
 **A — CI integration.** The agent loop ends at "PR open"; the existing pipeline then drives, and Paperclip reacts around it:
+
 - On the PR, `ci.yml` runs automatically → its green status is **independent evidence** for Gate 3 (agents test locally for Gate 2; CI re-runs on neutral infra so a faked local pass is caught).
 - After the requester merges and `deploy-staging.yml` runs, a final CI step calls a **Paperclip public routine trigger** to start the **staging-recette routine** — the clean CI→Paperclip hand-off; deploy success/failure can be posted back to the issue.
 
 **B — Agents executing the cahier de recette on staging.** Yes, and the recette (and thus the agent) differs by project nature:
-- A **QA / Recette** agent runs the cahier, capabilities packaged as Paperclip **skills** per domain: *back office / MCP* (call the MCP tools / API directly — what we did by hand for the approval gate); *web app* (Playwright / computer-use); *infra* (smoke scripts, `terraform plan`, probes).
-- **Recommendation**: make the cahier **executable** wherever possible (scripted smoke suite vs staging, captured as a work-product — deterministic, hard to fake) and reserve the *agent* for judgment steps (UX, visual, exploratory). The plan declares **which recette profile** applies.
+
+- A **QA / Recette** agent runs the cahier, capabilities packaged as Paperclip **skills** per domain: _back office / MCP_ (call the MCP tools / API directly — what we did by hand for the approval gate); _web app_ (Playwright / computer-use); _infra_ (smoke scripts, `terraform plan`, probes).
+- **Recommendation**: make the cahier **executable** wherever possible (scripted smoke suite vs staging, captured as a work-product — deterministic, hard to fake) and reserve the _agent_ for judgment steps (UX, visual, exploratory). The plan declares **which recette profile** applies.
 
 ## 9. Branch lifecycle (answer C)
 
 Each evolution runs on its own `operator_branch`, disposable once its PR merges to `main`:
+
 - Enable **"Automatically delete head branches"** → GitHub deletes the branch on merge, zero accumulation (history preserved in `main` + the merged PR).
 - A lightweight **housekeeping routine** (Data-Officer-style heartbeat) deletes branches whose PR is closed/stale > N days, never touching `main`/`staging`/`production`.
 
 ## 10. Execution setup (the hands-on configuration)
 
-- **Project bound to the repo** — a Paperclip *project* for `gs-backoffice` with `executionWorkspacePolicy = operator_branch` (each task = isolated branch workspace).
+- **Project bound to the repo** — a Paperclip _project_ for `gs-backoffice` with `executionWorkspacePolicy = operator_branch` (each task = isolated branch workspace).
 - **Environment** — reuse **Local** (`driver: local`, on the Paperclip container; has `git` + `claude-code`). The repo must be cloneable + a **GitHub token** available for push + PR.
 - **Adapters** — `claude_local` for the build team (`ANTHROPIC_API_KEY`); **`grok_local` (xAI)** for the Auditor → needs the xAI API key.
 - **Agents** — Methods Officer / Engineer / QA / Security / Auditor with `adapterType`, `defaultEnvironmentId = Local`, `reportsTo`, instructions, `permissions`, budgets.
@@ -167,4 +172,4 @@ Each evolution runs on its own `operator_branch`, disposable once its PR merges 
 
 ## 13. Why this stays on the Paperclip standard
 
-No bespoke orchestration engine: native agents + hierarchy, native planning / plan-acceptance / child-issue decomposition, native `claude_local` (+ a second native adapter for the auditor), native environments/workspaces, native git `operator_branch`, native work-products for evidence, native public triggers for the CI hand-off, native issues/labels for the release registry. Our only custom code is the *intake* (an official process), the *compliance registry* (config + Notion), the *executable recette suites*, the *release registry tool/routine*, and the *notifications* (already built). The loop is an **assembly of Paperclip primitives**, not a parallel system.
+No bespoke orchestration engine: native agents + hierarchy, native planning / plan-acceptance / child-issue decomposition, native `claude_local` (+ a second native adapter for the auditor), native environments/workspaces, native git `operator_branch`, native work-products for evidence, native public triggers for the CI hand-off, native issues/labels for the release registry. Our only custom code is the _intake_ (an official process), the _compliance registry_ (config + Notion), the _executable recette suites_, the _release registry tool/routine_, and the _notifications_ (already built). The loop is an **assembly of Paperclip primitives**, not a parallel system.
