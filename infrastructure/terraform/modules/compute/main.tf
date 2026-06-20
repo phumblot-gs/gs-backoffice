@@ -168,6 +168,10 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "SPRITES_TOKEN"
         valueFrom = "${var.app_secrets_arn}:SPRITES_TOKEN::"
       },
+      {
+        name      = "PAPERCLIP_SECRETS_MASTER_KEY"
+        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_SECRETS_MASTER_KEY::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"

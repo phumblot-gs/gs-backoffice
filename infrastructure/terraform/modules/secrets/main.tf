@@ -28,6 +28,9 @@ resource "aws_secretsmanager_secret_version" "app" {
     GOOGLE_CHAT_WEBHOOKS = "{}"
     # Fly Sprites API token (sprites.dev) for the sandbox-provider plugin.
     SPRITES_TOKEN = "CHANGE_ME"
+    # Stable key for Paperclip's local_encrypted secret store, so company secrets
+    # survive redeploys on ephemeral Fargate (entrypoint writes it to master.key).
+    PAPERCLIP_SECRETS_MASTER_KEY = "CHANGE_ME"
   })
 
   lifecycle {
