@@ -8,8 +8,13 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 # Create directories
 mkdir -p "$CONFIG_DIR/logs" "$CONFIG_DIR/data/storage" "$CONFIG_DIR/data/backups" "$CONFIG_DIR/secrets"
 
-# Generate secrets key if needed
-if [ ! -f "$CONFIG_DIR/secrets/master.key" ]; then
+# Secrets master key. Prefer a STABLE key injected via PAPERCLIP_SECRETS_MASTER_KEY
+# so local_encrypted secrets (e.g. sandbox-provider API tokens) survive redeploys on
+# the ephemeral Fargate filesystem. Fall back to a generated key only if none is
+# provided and none exists yet (local/dev).
+if [ -n "$PAPERCLIP_SECRETS_MASTER_KEY" ]; then
+  printf '%s\n' "$PAPERCLIP_SECRETS_MASTER_KEY" > "$CONFIG_DIR/secrets/master.key"
+elif [ ! -f "$CONFIG_DIR/secrets/master.key" ]; then
   head -c 32 /dev/urandom | base64 > "$CONFIG_DIR/secrets/master.key"
 fi
 
