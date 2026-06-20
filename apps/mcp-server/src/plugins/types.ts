@@ -33,7 +33,13 @@ export interface PluginTool {
   description: string;
   schema: z.ZodObject<z.ZodRawShape>;
   requiredPermission: string;
-  evtEventType: string | null;
+  /**
+   * If set, the tool's invocation is recorded to the audit trail under the single
+   * `backoffice.audit.tool_invoked` type, with this string as the payload `category`.
+   * null → the tool is not audited. This is NOT a business event type — business
+   * events (e.g. backoffice.approval.requested) are published explicitly by plugins.
+   */
+  auditCategory: string | null;
   execute(input: Record<string, unknown>, context: ToolContext): Promise<CallToolResult>;
 }
 

@@ -1,5 +1,5 @@
 import type { EvtEvent, EvtQueryParams, EvtQueryResult } from '@gs-backoffice/core';
-import type { EvtClientConfig } from './types.js';
+import type { EvtClientConfig, EvtQueue, EvtQueueSpec, EvtQueueMessage } from './types.js';
 import { EvtApiError } from './errors.js';
 
 const DEFAULT_BASE_URL = 'https://api.events.grand-shooting.com';
@@ -95,8 +95,53 @@ export class EvtClient {
     }
   }
 
+  // --- Durable queue consumption (SQS-backed) ---------------------------------
+  // The reliable consumption path: a server-side-filtered queue with at-least-once
+  // delivery + ack, so no event is missed regardless of volume or restarts.
+
+  /** Fetch a queue by name, or null if it does not exist. */
+  async getQueue(name: string): Promise<EvtQueue | null> {
+    try {
+      return await this.request<EvtQueue>(`/v1/queues/${name}`, { method: 'GET' });
+    } catch (err) {
+      if (err instanceof EvtApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /** Create a queue. */
+  async createQueue(spec: EvtQueueSpec): Promise<EvtQueue> {
+    return this.request<EvtQueue>('/v1/queues', {
+      method: 'POST',
+      body: JSON.stringify(spec),
+    });
+  }
+
+  /** Idempotently ensure a queue exists with the given spec; returns it. */
+  async ensureQueue(spec: EvtQueueSpec): Promise<EvtQueue> {
+    return (await this.getQueue(spec.name)) ?? (await this.createQueue(spec));
+  }
+
+  /** Long-poll for messages on a queue's messages endpoint (absolute URL). */
+  async receiveMessages(messagesUrl: string): Promise<EvtQueueMessage[]> {
+    const res = await this.request<{ messages?: EvtQueueMessage[] }>(messagesUrl, {
+      method: 'GET',
+    });
+    return res.messages ?? [];
+  }
+
+  /** Acknowledge (delete) processed messages by receipt handle (batch). */
+  async ackMessages(messagesUrl: string, receiptHandles: string[]): Promise<void> {
+    if (receiptHandles.length === 0) return;
+    await this.request(messagesUrl, {
+      method: 'DELETE',
+      body: JSON.stringify({ receiptHandles }),
+    });
+  }
+
   private async request<T>(path: string, options: RequestInit): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
+    // `path` may be an absolute URL (queue message endpoints live on a different host).
+    const url = path.startsWith('http') ? path : `${this.baseUrl}${path}`;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= this.retries; attempt++) {

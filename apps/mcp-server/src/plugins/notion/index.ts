@@ -113,7 +113,7 @@ export class NotionPlugin implements ServicePlugin {
         question: z.string().describe('The question about internal processes'),
       }),
       requiredPermission: 'notion.read',
-      evtEventType: 'backoffice.knowledge.query',
+      auditCategory: 'knowledge.query',
       execute: async (input, context) => this.executeAsk(input as { question: string }, context),
     };
   }
@@ -133,7 +133,7 @@ export class NotionPlugin implements ServicePlugin {
           ),
       }),
       requiredPermission: 'notion.read',
-      evtEventType: null,
+      auditCategory: null,
       execute: async (input, context) =>
         this.executeSearchDocs(input as { section?: string }, context),
     };

@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import pino from 'pino';
 import type { EvtClient } from '@gs-backoffice/evt-client';
 import type { EvtActor, EvtScope } from '@gs-backoffice/core';
-import { createBackofficeEvent } from '@gs-backoffice/core';
+import { createBackofficeEvent, AUDIT_TOOL_INVOKED } from '@gs-backoffice/core';
 import type { ServicePlugin, PluginTool, ToolContext, PluginInitConfig } from './types.js';
 
 const logger = pino({ name: 'plugin-manager' });
@@ -53,7 +53,7 @@ export class PluginManager {
         const parsed = tool.schema.parse(input);
         const result = await tool.execute(parsed as Record<string, unknown>, context);
 
-        if (tool.evtEventType) {
+        if (tool.auditCategory) {
           const actor: EvtActor = {
             userId: context.userId,
             accountId: this.evtAccountId,
@@ -64,12 +64,15 @@ export class PluginManager {
             resourceType: tool.name,
             resourceId: context.userId,
           };
+          // Always the dedicated audit type — never a business event type — so audit
+          // and business events are unambiguous on the bus. The action is the category.
           const event = createBackofficeEvent(
-            tool.evtEventType,
+            AUDIT_TOOL_INVOKED,
             actor,
             scope,
             {
               tool: tool.name,
+              category: tool.auditCategory,
               userEmail: context.userEmail,
               input: parsed,
               isError: result.isError ?? false,
