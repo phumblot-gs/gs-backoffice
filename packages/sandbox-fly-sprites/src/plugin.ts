@@ -365,7 +365,9 @@ const plugin = definePlugin({
     const outPath = `/tmp/.pcx-${id}.out`;
     const errPath = `/tmp/.pcx-${id}.err`;
     const cleanup = () =>
-      runScript(sprite, `rm -f ${shellQuote(outPath)} ${shellQuote(errPath)}`).catch(() => undefined);
+      runScript(sprite, `rm -f ${shellQuote(outPath)} ${shellQuote(errPath)}`).catch(
+        () => undefined,
+      );
     try {
       const meta = await runScript(
         sprite,

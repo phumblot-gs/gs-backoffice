@@ -56,7 +56,12 @@ function fakeFileSprite(content: Buffer, opts: { truncateFirst?: boolean } = {})
         seen.add(key);
         slice = slice.subarray(0, Math.max(0, length - 7)); // short read once
       }
-      const cmd = new EventEmitter() as EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: () => void };
+      const cmd = new EventEmitter() as EventEmitter & {
+        stdin: PassThrough;
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: () => void;
+      };
       cmd.stdin = new PassThrough();
       cmd.stdout = new PassThrough();
       cmd.stderr = new PassThrough();
@@ -87,7 +92,11 @@ describe('readRemoteFile', () => {
   it('retries a short read and still returns correct bytes', async () => {
     const content = Buffer.alloc(5000);
     for (let i = 0; i < content.length; i += 1) content[i] = (i * 13) % 256;
-    const out = await readRemoteFile(fakeFileSprite(content, { truncateFirst: true }), '/f', content.length);
+    const out = await readRemoteFile(
+      fakeFileSprite(content, { truncateFirst: true }),
+      '/f',
+      content.length,
+    );
     expect(out.equals(content)).toBe(true);
   });
 });
