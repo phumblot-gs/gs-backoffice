@@ -1,54 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  renderMessage,
-  webhookForScope,
-  parseWebhooks,
-  selectFreshEvents,
-  SUBSCRIBED_EVENT_TYPES,
-} from './index.js';
+import { renderMessage, webhookForScope, parseWebhooks, SUBSCRIBED_EVENT_TYPES } from './index.js';
 import type { EvtEvent } from '@gs-backoffice/core';
-
-describe('selectFreshEvents (EVT head tailing)', () => {
-  const ev = (id: string, ts: string): EvtEvent => ({
-    eventId: id,
-    eventType: 'backoffice.approval.requested',
-    timestamp: ts,
-    source: { application: 'gs-backoffice', version: '0.1.0', environment: 'staging' },
-    actor: { userId: 'u', accountId: '16' },
-    scope: { accountId: '16', resourceType: 'approval', resourceId: 'x' },
-    payload: {},
-  });
-  // Query returns NEWEST-first.
-  const newestFirst = [ev('b', '2026-06-18T23:05:00Z'), ev('a', '2026-06-18T23:00:00Z')];
-
-  it('establishes a baseline on first call without replaying history', () => {
-    const r = selectFreshEvents(newestFirst, null, new Set());
-    expect(r.fresh).toHaveLength(0);
-    expect(r.lastTs).toBe('2026-06-18T23:05:00Z');
-  });
-
-  it('emits only events newer than the baseline, in chronological order', () => {
-    const seen = new Set<string>();
-    const r = selectFreshEvents(
-      [ev('c', '2026-06-18T23:10:00Z'), ev('b', '2026-06-18T23:05:00Z')],
-      '2026-06-18T23:05:00Z',
-      seen,
-    );
-    // 'b' is at the boundary (== lastTs) but not in `seen` yet → emitted once; 'c' is newer.
-    expect(r.fresh.map((e) => e.eventId)).toEqual(['b', 'c']);
-    expect(r.lastTs).toBe('2026-06-18T23:10:00Z');
-  });
-
-  it('does not re-emit an already-seen boundary event', () => {
-    const seen = new Set(['b']);
-    const r = selectFreshEvents(
-      [ev('c', '2026-06-18T23:10:00Z'), ev('b', '2026-06-18T23:05:00Z')],
-      '2026-06-18T23:05:00Z',
-      seen,
-    );
-    expect(r.fresh.map((e) => e.eventId)).toEqual(['c']);
-  });
-});
 
 const base = {
   source: { application: 'gs-backoffice', version: '0.1.0', environment: 'staging' as const },
@@ -125,20 +77,23 @@ describe('renderMessage', () => {
     expect(button.onClick.openLink.url).toBe('https://claude.ai/new?q=...');
   });
 
-  it('ignores the audit event (same type, no business payload) for requested/decided', () => {
-    // PluginManager audit events reuse the tool's evtEventType with a {tool,input,isError} payload.
-    const auditReq: EvtEvent = {
+  it('ignores audit events (dedicated type, not a business event)', () => {
+    // Audit events now use the dedicated backoffice.audit.tool_invoked type.
+    const audit: EvtEvent = {
       ...base,
-      eventType: 'backoffice.approval.requested',
-      payload: { tool: 'henri_start_workflow', isError: false },
+      eventType: 'backoffice.audit.tool_invoked',
+      payload: { tool: 'henri_approve', category: 'approval.decided', isError: false },
     };
-    const auditDec: EvtEvent = {
+    expect(renderMessage(audit)).toBeNull();
+  });
+
+  it('defensively skips a business event missing its payload (belt-and-suspenders)', () => {
+    const bad: EvtEvent = {
       ...base,
       eventType: 'backoffice.approval.decided',
-      payload: { tool: 'henri_approve', input: { ticketId: 'GRA-8' }, isError: false },
+      payload: { tool: 'henri_approve' },
     };
-    expect(renderMessage(auditReq)).toBeNull();
-    expect(renderMessage(auditDec)).toBeNull();
+    expect(renderMessage(bad)).toBeNull();
   });
 
   it('renders an approved decision', () => {

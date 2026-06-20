@@ -6,7 +6,8 @@ const logger = pino({ name: 'notify-consumer' });
 
 const EVT_API_URL = process.env.EVT_API_URL;
 const EVT_API_KEY = process.env.EVT_API_KEY;
-const POLL_INTERVAL = parseInt(process.env.NOTIFY_POLL_INTERVAL_MS ?? '5000', 10);
+// Durable, server-side-filtered queue: no event is missed regardless of volume or restarts.
+const QUEUE_NAME = process.env.NOTIFY_QUEUE_NAME ?? 'backoffice-notify';
 
 // Event types the consumer renders into Google Chat messages. Add more here as
 // other agents start publishing notify-worthy events.
@@ -121,39 +122,6 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
   }
 }
 
-/**
- * Pick the events to emit from a newest-first query page, given the last-seen
- * timestamp and the set of already-processed ids, and return the advanced
- * timestamp. The EVT query API only supports newest-first reads with a
- * backward-pagination cursor (no forward tail, and `timeRange` 500s), so we tail
- * by re-reading the head each interval and de-duplicating. On the first call
- * (lastTs === null) it emits nothing and just establishes the baseline, so we
- * never replay history on startup.
- */
-export function selectFreshEvents(
-  newestFirst: EvtEvent[],
-  lastTs: string | null,
-  seen: Set<string>,
-): { fresh: EvtEvent[]; lastTs: string | null } {
-  const chronological = [...newestFirst].reverse();
-  if (lastTs === null) {
-    const newest = chronological.length
-      ? String(chronological[chronological.length - 1].timestamp ?? '')
-      : null;
-    return { fresh: [], lastTs: newest };
-  }
-  const fresh: EvtEvent[] = [];
-  let newLastTs = lastTs;
-  for (const e of chronological) {
-    const ts = String(e.timestamp ?? '');
-    if (e.eventId && seen.has(e.eventId)) continue; // already handled (boundary re-read)
-    if (ts && ts < lastTs) continue; // older than the baseline
-    fresh.push(e);
-    if (ts && ts > newLastTs) newLastTs = ts;
-  }
-  return { fresh, lastTs: newLastTs };
-}
-
 async function postToChat(url: string, body: Record<string, unknown>): Promise<void> {
   const res = await fetch(url, {
     method: 'POST',
@@ -169,16 +137,23 @@ async function postToChat(url: string, body: Record<string, unknown>): Promise<v
 
 const WEBHOOKS = parseWebhooks(process.env.GOOGLE_CHAT_WEBHOOKS);
 
-async function handleEvent(event: EvtEvent): Promise<void> {
+/**
+ * Process one event. Returns whether the message may be acknowledged (removed from
+ * the queue). We ACK when there is nothing to retry — successfully posted, or
+ * deliberately dropped (audit/unknown event, or no webhook configured: redelivering
+ * forever would only spam). We DON'T ack on a transient Google Chat failure, so the
+ * message is redelivered after the visibility timeout (at-least-once).
+ */
+async function handleEvent(event: EvtEvent): Promise<boolean> {
   const rendered = renderMessage(event);
-  if (!rendered) return;
+  if (!rendered) return true; // audit/unknown event — nothing to send
   const target = webhookForScope(rendered.scope, WEBHOOKS);
   if (!target) {
     logger.warn(
       { eventId: event.eventId, scope: rendered.scope },
-      'No Google Chat webhook configured for this scope — skipping (set GOOGLE_CHAT_WEBHOOKS)',
+      'No Google Chat webhook configured for this scope — dropping (set GOOGLE_CHAT_WEBHOOKS)',
     );
-    return;
+    return true;
   }
   try {
     await postToChat(target.url, rendered.body);
@@ -186,11 +161,13 @@ async function handleEvent(event: EvtEvent): Promise<void> {
       { eventId: event.eventId, eventType: event.eventType, channel: target.channel },
       'Notification posted to Google Chat',
     );
+    return true;
   } catch (err) {
     logger.error(
       { eventId: event.eventId, error: err },
-      'Failed to post notification to Google Chat',
+      'Failed to post to Google Chat — leaving message for redelivery',
     );
+    return false;
   }
 }
 
@@ -200,43 +177,60 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const client = new EvtClient({ apiKey: EVT_API_KEY, baseUrl: EVT_API_URL });
-  logger.info(
-    {
-      subscribed: SUBSCRIBED_EVENT_TYPES,
-      intervalMs: POLL_INTERVAL,
-      channels: Object.keys(WEBHOOKS),
+
+  // Ensure our durable, server-side-filtered queue exists, then consume + ack it.
+  const queue = await client.ensureQueue({
+    name: QUEUE_NAME,
+    filters: { eventTypes: SUBSCRIBED_EVENT_TYPES },
+    config: {
+      maxMessages: 10,
+      waitTimeSeconds: 20,
+      visibilityTimeout: 60,
+      retentionPeriod: 604800,
     },
-    'Notify consumer started — polling EVT for notify-worthy events',
+  });
+  const messagesUrl = queue.endpoints?.messages;
+  if (!messagesUrl) {
+    logger.error({ queue: QUEUE_NAME }, 'Queue has no messages endpoint — cannot consume');
+    process.exit(1);
+  }
+  logger.info(
+    { queue: QUEUE_NAME, subscribed: SUBSCRIBED_EVENT_TYPES, channels: Object.keys(WEBHOOKS) },
+    'Notify consumer started — consuming the EVT queue',
   );
   if (Object.keys(WEBHOOKS).length === 0) {
     logger.warn(
-      'GOOGLE_CHAT_WEBHOOKS is empty — notifications will be logged and skipped until configured',
+      'GOOGLE_CHAT_WEBHOOKS is empty — notifications will be logged and dropped until configured',
     );
   }
 
-  // Tail the EVT head each interval (newest-first, filtered), de-duplicating by id.
-  const SEEN_MAX = 500;
-  let lastTs: string | null = null;
-  const seen = new Set<string>();
+  // At-least-once delivery → guard against a redelivered message double-posting
+  // within a session (e.g. post succeeded but ack failed).
+  const SEEN_MAX = 1000;
+  const handled = new Set<string>();
   for (;;) {
     try {
-      const result = await client.query({
-        filters: { eventTypes: SUBSCRIBED_EVENT_TYPES },
-        limit: 50,
-      });
-      const selected = selectFreshEvents(result.events, lastTs, seen);
-      lastTs = selected.lastTs;
-      for (const event of selected.fresh) {
-        if (event.eventId) {
-          seen.add(event.eventId);
-          if (seen.size > SEEN_MAX) seen.delete(seen.values().next().value as string);
+      const messages = await client.receiveMessages(messagesUrl);
+      const toAck: string[] = [];
+      for (const msg of messages) {
+        const id = msg.body?.eventId ?? msg.messageId;
+        if (handled.has(id)) {
+          toAck.push(msg.receiptHandle); // already done — just ack the duplicate
+          continue;
         }
-        await handleEvent(event);
+        const ack = await handleEvent(msg.body);
+        if (ack) {
+          toAck.push(msg.receiptHandle);
+          handled.add(id);
+          if (handled.size > SEEN_MAX) handled.delete(handled.values().next().value as string);
+        }
       }
+      await client.ackMessages(messagesUrl, toAck);
     } catch (err) {
-      logger.error({ error: err }, 'EVT query failed — retrying next interval');
+      // Network/EVT blip — back off briefly and retry; unacked messages persist.
+      logger.error({ error: err }, 'Queue receive/ack failed — retrying shortly');
+      await new Promise((r) => setTimeout(r, 3000));
     }
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL));
   }
 }
 

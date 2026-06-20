@@ -58,8 +58,17 @@ export interface EvtQueryResult {
   hasMore?: boolean;
 }
 
+// Dedicated audit event type. EVERY tool invocation recorded for the audit trail
+// (SOC 2 CC7) is emitted under THIS single type — never under a business event type —
+// so audit and business events are always distinguishable on the bus. The action is
+// carried in the payload `category`.
+export const AUDIT_TOOL_INVOKED = 'backoffice.audit.tool_invoked';
+
 // Backoffice event type constants
 export const BACKOFFICE_EVENT_TYPES = {
+  // Audit
+  'audit.tool_invoked': AUDIT_TOOL_INVOKED,
+
   // Invoice
   'invoice.draft_created': 'backoffice.invoice.draft_created',
   'invoice.approved': 'backoffice.invoice.approved',

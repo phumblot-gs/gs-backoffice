@@ -135,7 +135,7 @@ export class PaperclipPlugin implements ServicePlugin {
         'Use this before henri_start_workflow to discover available processes.',
       schema: z.object({}),
       requiredPermission: 'paperclip.read',
-      evtEventType: null,
+      auditCategory: null,
       execute: async (_input, context) => this.executeListWorkflows(context),
     };
   }
@@ -158,7 +158,7 @@ export class PaperclipPlugin implements ServicePlugin {
         notes: z.string().optional().describe('Additional notes'),
       }),
       requiredPermission: 'paperclip.create_ticket',
-      evtEventType: 'backoffice.workflow.started',
+      auditCategory: 'workflow.started',
       execute: async (input, context) =>
         this.executeStartWorkflow(
           input as { workflow: string; parameters?: Record<string, string>; notes?: string },
@@ -175,7 +175,7 @@ export class PaperclipPlugin implements ServicePlugin {
         'Shows only requests you are authorized to approve (matching scope, and not your own request).',
       schema: z.object({}),
       requiredPermission: 'paperclip.approve',
-      evtEventType: null,
+      auditCategory: null,
       execute: async (_input, context) => this.executeListApprovals(context),
     };
   }
@@ -192,7 +192,7 @@ export class PaperclipPlugin implements ServicePlugin {
         note: z.string().optional().describe('Optional decision note (recorded on the ticket)'),
       }),
       requiredPermission: 'paperclip.approve',
-      evtEventType: 'backoffice.approval.decided',
+      auditCategory: 'approval.decided',
       execute: async (input, context) =>
         this.executeApprove(
           input as { ticketId: string; decision: 'approve' | 'reject'; note?: string },
@@ -209,7 +209,7 @@ export class PaperclipPlugin implements ServicePlugin {
         ticketId: z.string().describe('The ticket ID (e.g., "GRA-1")'),
       }),
       requiredPermission: 'paperclip.read',
-      evtEventType: null,
+      auditCategory: null,
       execute: async (input) => this.executeTicketStatus(input as { ticketId: string }),
     };
   }
@@ -223,7 +223,7 @@ export class PaperclipPlugin implements ServicePlugin {
         message: z.string().describe('Message to add to the ticket'),
       }),
       requiredPermission: 'paperclip.update_ticket',
-      evtEventType: 'backoffice.ticket.updated',
+      auditCategory: 'ticket.updated',
       execute: async (input, context) =>
         this.executeTicketUpdate(input as { ticketId: string; message: string }, context),
     };
@@ -240,7 +240,7 @@ export class PaperclipPlugin implements ServicePlugin {
           .describe('Digest period (defaults to weekly)'),
       }),
       requiredPermission: 'paperclip.read',
-      evtEventType: null,
+      auditCategory: null,
       execute: async (input) => this.executeDigest(input as { period?: string }),
     };
   }
