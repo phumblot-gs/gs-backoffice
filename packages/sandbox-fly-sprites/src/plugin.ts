@@ -16,7 +16,7 @@ import type {
   PluginEnvironmentValidateConfigParams,
   PluginEnvironmentValidationResult,
 } from '@paperclipai/plugin-sdk';
-import { SpritesClient, Sprite, ExecError } from '@fly/sprites';
+import { SpritesClient, Sprite } from '@fly/sprites';
 import { parseDriverConfig, resolveApiKey, type SpriteDriverConfig } from './config.js';
 import { buildLoginShellScript } from './shell.js';
 
@@ -43,31 +43,67 @@ interface ExecOutcome {
   timedOut: boolean;
 }
 
+interface RunScriptOptions {
+  /** Data piped to the command's stdin. Paperclip's agent adapters (claude_local,
+   *  codex_local, …) deliver the prompt and managed-runtime file transfers this way. */
+  stdin?: string;
+  /** Hard wall-clock limit for the command. The process is killed on expiry. */
+  timeoutMs?: number;
+  /** Environment variables for the command. */
+  env?: Record<string, string>;
+}
+
 /**
- * Run a shell script in the Sprite via `sh -c`. The SDK's exec/execFile throw
- * ExecError on a non-zero exit (like child_process), so we catch it and return
- * the captured exit code + streams rather than throwing.
+ * Run a shell script in the Sprite via `sh -c`.
+ *
+ * Uses `spawn` (not `execFile`) so we can forward stdin and signal EOF: the SDK's
+ * `execFile` opens the stdin channel but never closes it, so a process that reads
+ * stdin (e.g. `claude -p` reading its prompt) hangs waiting for input that never
+ * arrives, then the run dies as `process_lost`. We always send StdinEOF — writing
+ * the caller's `stdin` first when present — and resolve with the captured exit code
+ * and streams rather than throwing on a non-zero exit (mirrors child_process).
  */
-async function runScript(sprite: Sprite, script: string): Promise<ExecOutcome> {
-  try {
-    const r = await sprite.execFile('sh', ['-c', script]);
-    return {
-      exitCode: r.exitCode,
-      stdout: String(r.stdout),
-      stderr: String(r.stderr),
-      timedOut: false,
-    };
-  } catch (error) {
-    if (error instanceof ExecError) {
-      return {
-        exitCode: error.exitCode,
-        stdout: String(error.stdout),
-        stderr: String(error.stderr),
-        timedOut: false,
-      };
-    }
-    throw error;
-  }
+export function runScript(
+  sprite: Sprite,
+  script: string,
+  options: RunScriptOptions = {},
+): Promise<ExecOutcome> {
+  return new Promise<ExecOutcome>((resolve, reject) => {
+    const cmd = sprite.spawn('sh', ['-c', script], options.env ? { env: options.env } : {});
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    cmd.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    cmd.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+
+    cmd.once('spawn', () => {
+      if (options.stdin) cmd.stdin.write(options.stdin);
+      cmd.stdin.end();
+      if (options.timeoutMs && options.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          timedOut = true;
+          cmd.kill();
+        }, options.timeoutMs);
+      }
+    });
+
+    cmd.on('exit', (code: number) => {
+      if (timer) clearTimeout(timer);
+      resolve({
+        exitCode: timedOut ? null : code,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        timedOut,
+      });
+    });
+
+    cmd.on('error', (error: Error) => {
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 function leaseMetadata(input: {
@@ -244,13 +280,27 @@ const plugin = definePlugin({
       env: params.env,
       cwd: params.cwd,
     });
-    const result = await runScript(sprite, script);
-    return {
-      exitCode: result.exitCode,
-      timedOut: result.timedOut,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    };
+    try {
+      const result = await runScript(sprite, script, {
+        stdin: params.stdin,
+        timeoutMs: params.timeoutMs,
+      });
+      return {
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    } catch (error) {
+      // A dropped WebSocket / transport error becomes a failed command rather
+      // than a thrown transport crash, so Paperclip can record and retry it.
+      return {
+        exitCode: 1,
+        timedOut: false,
+        stdout: '',
+        stderr: `Fly Sprites execution failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   },
 });
 
