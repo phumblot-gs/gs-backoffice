@@ -27,15 +27,11 @@ RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
 FROM base AS production
 WORKDIR /app
 RUN npm install --global paperclipai@2026.609.0 @anthropic-ai/claude-code@latest
-# Surgical patch: make recovery/retry runs inherit the originating run's environment
-# instead of falling back to Local (so a process_lost on a Fly-bound run retries on
-# Fly, not Local). Anchored + idempotent; fails the build loudly if Paperclip's
-# internals move (review on every paperclipai version bump).
-COPY docker/patches/patch-paperclip-retry-env.mjs /tmp/patch-paperclip-retry-env.mjs
-RUN node /tmp/patch-paperclip-retry-env.mjs && rm -f /tmp/patch-paperclip-retry-env.mjs
-# Surgical patch: forward SPRITES_TOKEN + SANDBOX_GITHUB_TOKEN to plugin workers
-# (the sandbox tools need them; the SDK's other secret paths are unavailable to
-# tools in 2026.609.0). Anchored + idempotent.
+# Surgical patch: forward the sandbox tools' secrets (SPRITES_TOKEN, SANDBOX_GITHUB_*)
+# to the plugin worker via ADAPTER_ENV_PASSTHROUGH, and gate that passthrough on
+# `agent.tools.register` (the SDK's other secret paths are unavailable to tools in
+# 2026.609.0; the env driver that previously satisfied the gate is retired).
+# Anchored + idempotent.
 COPY docker/patches/patch-paperclip-plugin-env.mjs /tmp/patch-paperclip-plugin-env.mjs
 RUN node /tmp/patch-paperclip-plugin-env.mjs && rm -f /tmp/patch-paperclip-plugin-env.mjs
 # Surgical patch: raise the executeTool host→worker RPC timeout from 30s to the
