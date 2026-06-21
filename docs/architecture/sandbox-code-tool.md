@@ -1,6 +1,6 @@
-# Sandbox Code Tool — running Claude in a Fly Sprite as a _tool_, not an _environment_
+# Sandbox Tools — running commands (and Claude) in a Fly Sprite as _tools_, not an _environment_
 
-> Status: **design (2026-06-21). Not yet built.** Goal: let a Methods Officer agent delegate a coding task to **Claude running inside an isolated, reusable Fly Sprite microVM**, have the result **pushed to GitHub from inside the sandbox**, then **regain control** to review the diff (via GitHub tools), iterate, and **re-invoke Claude in the same sandbox** — all without depending on Paperclip's sandbox _environment_ machinery. The capability is packaged as a **self-contained plugin tool** so it stays isolated and is cleanly removable if/when Paperclip ships native E2B support that matches this need.
+> Status: **design (2026-06-21, revised). Not yet built.** Goal: give the governance agents an isolated, reusable **Fly Sprite microVM** they can drive as **tools** — the general primitive is `sandbox_run` (execute any command in the sandbox at a given git ref and capture the result); `sandbox_code_task` is sugar on top for the engineer agent (run Claude → edit → commit → **push from inside the sandbox**). The same primitive lets **verification agents** (the independent auditor, acceptance-criteria controllers) run scanners, pentest tools and functional tests — in their **own** sandbox checked out at the pushed commit, for trustworthy, independent verification. All without depending on Paperclip's sandbox _environment_ machinery. Packaged as a **self-contained plugin** so it stays isolated and is cleanly removable if/when Paperclip ships native E2B that matches this need.
 
 ## 1. Why a tool, not an environment driver
 
@@ -19,7 +19,7 @@ What carries over: the **reliable Sprite transport** we built and validated ([#5
 
 ## 2. The shape of it
 
-The agent that runs the loop executes normally (Local, `claude_local`). It calls one tool to offload a coding task to a sandbox, gets a structured result, then uses its **GitHub tools** to inspect the actual diff/PR and decide what to do next.
+Agents run normally (Local, `claude_local`) and call the sandbox **tools** to offload work to an isolated microVM: the engineer offloads a **coding task** (`sandbox_code_task`); verification agents offload **scans/tests** (`sandbox_run`). Each gets a structured result and uses its **GitHub tools** to inspect the diff/PR. The diagram below shows the engineer's code-iteration loop; verification is the same primitive (`sandbox_run`) in a separate sandbox at the pushed commit (see §4, §6).
 
 ```
 Methods Officer / sub-agent (runs on Local)
@@ -44,9 +44,21 @@ Methods Officer / sub-agent  → reviews the diff via GitHub MCP tools (compare/
 
 The Sprite is **stateful and reusable across calls**: the agent and the sandbox have a conversation across multiple tool invocations, which is exactly the "invoke → review → re-invoke in the same sandbox" loop.
 
-## 3. Tool contract (draft)
+## 3. Tools (draft)
 
-`sandbox_code_task` — input:
+The capability is a small family of tools over one shared Sprite lifecycle. **`sandbox_run` is the primitive**; everything else is built on it.
+
+### 3a. `sandbox_run` — the primitive (any command)
+
+Execute an arbitrary command in a sandbox checked out at a given git ref, and return the result. This is what **verification agents** use: code scanners (`semgrep`, `trivy`), pentest tools, functional tests (`pnpm test`), lint, build — anything.
+
+Input: `sandboxKey`, `repoUrl`, `ref` (branch or commit SHA to check out), `command`, `timeoutMs` (opt), `credMode` (opt: `read_only` default | `push`), `artifacts` (opt: paths to capture back, e.g. a SARIF report). Output: `{ sandboxKey, spriteName, ref, exitCode, stdout, stderr, artifacts?, durationMs }`. Large outputs/reports are captured via the reliable chunked transport ([#56]); big files are read back from the sandbox rather than streamed.
+
+`sandbox_code_task` is then **sugar**: `sandbox_run` with `command = claude -p "<task>"` (+ `acceptEdits`) followed by `git add/commit/push` — i.e. the same primitive plus the git wrapper and a parsed Claude result.
+
+### 3b. `sandbox_code_task` — engineer convenience (Claude edits + pushes)
+
+Input:
 
 | Field             | Meaning                                                                                                                                                                                                                                                        |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -78,25 +90,25 @@ Fly Sprites auto-hibernate: `running → warm → cold` when idle; an exec wakes
 - **First call for a `sandboxKey`**: create the Sprite, `git clone` the (per-project) `repoUrl`, (optionally) provision toolchain (e.g. `pnpm` — missing from the base image; install once).
 - **Subsequent calls (same key)**: the Sprite is cold (≈ free) → exec wakes it → `git fetch` + checkout/reset → `claude` iterates → push. No re-clone; fast.
 - **Repo-match guard**: because `repoUrl` is per-project and can change, on reuse the tool verifies the Sprite's existing clone `origin` matches the call's `repoUrl`. On mismatch (wrong/changed repo) it re-clones fresh (or provisions a new Sprite) rather than fetching the wrong repository. Keying `sandboxKey` to the project keeps this an edge case (repo URL changed for the project), not the norm.
-- **Isolation**: distinct `sandboxKey`s ⇒ distinct Sprites ⇒ **concurrent tasks/tickets never share a sandbox**. This is the per-ticket isolation requirement, made explicit and owned by the tool (vs Paperclip's `reuse_by_environment` which shared one Sprite per environment).
+- **Isolation by key/role**: distinct `sandboxKey`s ⇒ distinct Sprites ⇒ **concurrent tasks/tickets never share a sandbox**. The key is scoped by **role/intent**, not just by project: the engineer iterates in e.g. `eng-<issue>`, while a **verification agent uses its own** e.g. `audit-<issue>`. This is the per-ticket isolation requirement, made explicit and owned by the tool (vs Paperclip's `reuse_by_environment` which shared one Sprite per environment).
+- **Verifier independence (integrity)**: an auditor / acceptance-criteria controller must NOT run in the engineer's working sandbox (which may hold uncommitted or arranged state). It opens its **own fresh sandbox checked out at the exact pushed commit/branch** and runs its scans/tests against **what is in git** — with **read-only** credentials (`credMode: read_only`, clone only, no push). Independent sandbox + least-privilege creds = trustworthy verification.
 - **Cleanup**: a TTL / explicit `sandbox_release(sandboxKey)` tool deletes the Sprite (and kills any process in it). A periodic reaper deletes Sprites idle beyond a retention window, so nothing lingers (the orphaned-bridge class of bug cannot recur, because there is no bridge daemon — we never start one).
 
 Checkpoints (`createCheckpoint`/`restoreCheckpoint` in the SDK) are an optional optimisation: snapshot a freshly-cloned+provisioned Sprite and restore it to spin up sibling sandboxes instantly. Out of scope for the spike.
 
 ## 5. Secure GitHub credentials
 
-The sandbox needs a credential to `git push`. The tool injects it **per exec, in the command environment only** (never written to a persistent file in the Sprite, never baked in the image, never logged). Sourcing options, cheapest first: a **fine-grained PAT** scoped to the target repo (read/write contents + PRs), stored in AWS Secrets Manager and read by the worker; later, a **GitHub App** installation token minted per task (short-lived, least-privilege, auditable) — preferred for production. The credential lives in the Paperclip worker (the tool), is handed to the Sprite for the single push, and is not retained. This is the same "secure git cred" item deferred during the PoC, now scoped narrowly to one tool.
+Git credentials are injected **per exec, in the command environment only** (never written to a persistent file in the Sprite, never baked in the image, never logged), via a credential helper that reads the token from the env. Credentials are **scoped by usage** (`credMode`): `sandbox_code_task` (engineer) gets a **push-capable** token; `sandbox_run` for verification gets a **read-only** token (clone only) — least privilege per role. Sourcing, cheapest first: a **fine-grained PAT** in AWS Secrets Manager (push: contents+PR write; verify: contents read); later, a **GitHub App** installation token minted per task (short-lived, least-privilege, auditable) — preferred for production. The credential lives in the Paperclip worker, is handed to the Sprite for the single operation, and is not retained. This is the "secure git cred" item deferred during the PoC, now scoped narrowly per tool + per role.
 
 ## 6. Governance fit (Methods Officer loop)
 
 This tool is the **execution primitive** under the existing self-evolution design ([methods-officer-self-evolution.md](./methods-officer-self-evolution.md)). Mapping:
 
-- A specialist sub-agent (engineer) is assigned an implementation issue. Instead of running `claude_local` on a sandbox environment, it **calls `sandbox_code_task`** with the issue's repo/branch/task.
-- The push produces a branch/PR — the **artifact the governance gates already expect** (requester review via Google Chat, independent auditor on a different LLM, staging recette).
-- The sub-agent **reviews the diff with GitHub tools**, iterates by re-calling the tool, and when satisfied emits the work-product + routes to the merge gate.
-- The independent auditor can **read the same PR diff** (GitHub tools) — no dependency on Paperclip's workspace sync to inspect the work.
+- **Engineer** sub-agent: assigned an implementation issue, it **calls `sandbox_code_task`** (repo/branch/task), iterates by re-calling with the same `sandboxKey`, reviews its own diff via GitHub tools, and pushes a branch/PR — the **artifact the gates already expect**.
+- **Acceptance-criteria controller / independent auditor** (different LLM): the **acceptance criteria become concrete commands** run via **`sandbox_run`** — `pnpm test`, `semgrep`, `trivy`, a functional/pentest suite — in its **own fresh sandbox at the pushed commit** (read-only creds). The exit codes + captured reports become **work-products (evidence)** attached to the issue, which the merge gate and the requester review. The auditor can also **read the diff via GitHub tools** — two independent angles, neither trusting the engineer's sandbox.
+- Verification runs are **reproducible and isolated**: same commit + same command in a clean microVM → a result the gate can trust.
 
-The Methods Officer governance (criticality registry, acceptance criteria, gates, production-ready registry) is unchanged; only the _implementation step_ swaps "run agent in sandbox env" for "agent calls the sandbox tool."
+The Methods Officer governance (criticality registry, acceptance criteria, gates, production-ready registry) is unchanged; the _implementation step_ becomes "engineer calls `sandbox_code_task`", and **acceptance verification becomes "controllers call `sandbox_run`"** — both on the same isolated-sandbox primitive.
 
 ## 7. Risks / open questions
 
@@ -108,11 +120,13 @@ The Methods Officer governance (criticality registry, acceptance criteria, gates
 
 ## 8. Build plan
 
-1. **Spike** (throwaway public repo, disposable PAT): a minimal `sandbox_code_task` tool — create Sprite → clone → `claude -p` "touch a file + commit + push" → return the branch. Prove the loop end-to-end (push lands on GitHub, agent can re-invoke same Sprite).
-2. **Lifecycle**: `sandboxKey` reuse (warm/cold), `sandbox_release`, idle reaper, concurrency cap.
-3. **Secure creds**: PAT from Secrets Manager (spike) → GitHub App token (production).
-4. **Integrate** into the Methods Officer loop (engineer sub-agent calls the tool; auditor reviews via GitHub tools).
-5. **Retire** the sandbox _environment driver_ and the Paperclip retry-env patch ([#57]) once the tool supersedes them; keep the reliable-transport helpers ([#55]/[#56]) in the tool.
+0. **Spike — DONE (2026-06-21).** Standalone prototype validated end-to-end on `paperclip-poc`: create/reuse Sprite (cold→warm) → clone → `claude -p` (acceptEdits) edits → commit + **push from the sandbox** → re-invoke same Sprite → continue the branch → append → push. Verified on GitHub (two commits on `spike/sandbox-tool`). Git auth via credential helper, no token leak.
+1. **`sandbox_run` primitive** as a Paperclip **plugin tool** (the general command exec at a git ref, `credMode`, artifact capture), reusing the reliable transport ([#55]/[#56]). Then **`sandbox_code_task`** as sugar (claude + git push) and **`sandbox_release`**.
+2. **Lifecycle**: per-role `sandboxKey` reuse (warm/cold), `sandbox_release`, idle reaper, concurrency cap.
+3. **Secure creds**: PAT from Secrets Manager, **scoped by `credMode`** (push vs read-only) → GitHub App token (production).
+4. **Toolchain provisioning**: install what tasks/verifiers need (`pnpm`, scanners like `semgrep`/`trivy`, test deps) on first use, via a custom Sprite image, or a checkpoint of a tooled Sprite.
+5. **Integrate** into the Methods Officer loop: engineer calls `sandbox_code_task`; acceptance/auditor controllers call `sandbox_run` (own sandbox at the pushed commit, read-only) and attach results as work-products.
+6. **Retire** the sandbox _environment driver_ and the Paperclip retry-env patch ([#57]) once the tools supersede them; keep the reliable-transport helpers ([#55]/[#56]).
 
 [#55]: stdin forwarding fix (merged)
 [#56]: reliable large-output exec (merged)
