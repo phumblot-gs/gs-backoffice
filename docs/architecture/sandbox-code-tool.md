@@ -1,19 +1,19 @@
-# Sandbox Code Tool — running Claude in a Fly Sprite as a *tool*, not an *environment*
+# Sandbox Code Tool — running Claude in a Fly Sprite as a _tool_, not an _environment_
 
-> Status: **design (2026-06-21). Not yet built.** Goal: let a Methods Officer agent delegate a coding task to **Claude running inside an isolated, reusable Fly Sprite microVM**, have the result **pushed to GitHub from inside the sandbox**, then **regain control** to review the diff (via GitHub tools), iterate, and **re-invoke Claude in the same sandbox** — all without depending on Paperclip's sandbox *environment* machinery. The capability is packaged as a **self-contained plugin tool** so it stays isolated and is cleanly removable if/when Paperclip ships native E2B support that matches this need.
+> Status: **design (2026-06-21). Not yet built.** Goal: let a Methods Officer agent delegate a coding task to **Claude running inside an isolated, reusable Fly Sprite microVM**, have the result **pushed to GitHub from inside the sandbox**, then **regain control** to review the diff (via GitHub tools), iterate, and **re-invoke Claude in the same sandbox** — all without depending on Paperclip's sandbox _environment_ machinery. The capability is packaged as a **self-contained plugin tool** so it stays isolated and is cleanly removable if/when Paperclip ships native E2B support that matches this need.
 
 ## 1. Why a tool, not an environment driver
 
-We first integrated Fly Sprites as a Paperclip **sandbox environment driver** (`packages/sandbox-fly-sprites`). That makes the *agent run itself* execute "on" the sandbox, which drags in Paperclip's whole remote-workspace machinery — and every layer of that machinery fought the immature `@fly/sprites` 0.0.1 transport. The root realisation: **we don't want the agent to run in the sandbox; we want the agent to *send a task to* the sandbox.** Modelling the sandbox as a **tool** the agent calls (agent stays on Local) sidesteps the entire problem class.
+We first integrated Fly Sprites as a Paperclip **sandbox environment driver** (`packages/sandbox-fly-sprites`). That makes the _agent run itself_ execute "on" the sandbox, which drags in Paperclip's whole remote-workspace machinery — and every layer of that machinery fought the immature `@fly/sprites` 0.0.1 transport. The root realisation: **we don't want the agent to run in the sandbox; we want the agent to _send a task to_ the sandbox.** Modelling the sandbox as a **tool** the agent calls (agent stays on Local) sidesteps the entire problem class.
 
-| Problem hit with the environment-driver approach | Cause | Status with the tool approach |
-| --- | --- | --- |
-| stdin not forwarded → `claude` never got its prompt → `process_lost` | SDK `execFile` can't send stdin | reused fix (spawn + StdinEOF) — see [#55] |
-| workspace restore tar corrupted → `adapter_failed` | SDK exec WS truncates >64 KB stdout | reused fix (redirect + length-verified chunked read) — see [#56] |
-| `process_lost` mid-run | redirect silences the WS → Paperclip's liveness watchdog kills the in-sandbox agent process | **gone** — the agent runs on Local; nothing watches a process *inside* the Sprite |
-| retry fell back to Local | recovery re-resolves the env | **moot** — no Paperclip sandbox *run* happens (env-driver patch [#57] no longer triggers) |
-| orphaned Sprite kept running | Paperclip's bridge daemon not killed + `reuseLease` never deletes | **we own the lifecycle** in the tool |
-| no git-native workspace | sync strategy hard-coded by driver in Paperclip 2026.609.0 | **bypassed** — git clone/push happens inside the Sprite, Paperclip never syncs files |
+| Problem hit with the environment-driver approach                     | Cause                                                                                       | Status with the tool approach                                                             |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| stdin not forwarded → `claude` never got its prompt → `process_lost` | SDK `execFile` can't send stdin                                                             | reused fix (spawn + StdinEOF) — see [#55]                                                 |
+| workspace restore tar corrupted → `adapter_failed`                   | SDK exec WS truncates >64 KB stdout                                                         | reused fix (redirect + length-verified chunked read) — see [#56]                          |
+| `process_lost` mid-run                                               | redirect silences the WS → Paperclip's liveness watchdog kills the in-sandbox agent process | **gone** — the agent runs on Local; nothing watches a process _inside_ the Sprite         |
+| retry fell back to Local                                             | recovery re-resolves the env                                                                | **moot** — no Paperclip sandbox _run_ happens (env-driver patch [#57] no longer triggers) |
+| orphaned Sprite kept running                                         | Paperclip's bridge daemon not killed + `reuseLease` never deletes                           | **we own the lifecycle** in the tool                                                      |
+| no git-native workspace                                              | sync strategy hard-coded by driver in Paperclip 2026.609.0                                  | **bypassed** — git clone/push happens inside the Sprite, Paperclip never syncs files      |
 
 What carries over: the **reliable Sprite transport** we built and validated ([#55] stdin, [#56] chunked exec) and the `@fly/sprites` client wiring move from the env driver into the tool. What becomes unused: the **environment driver** itself and the Paperclip retry-env patch ([#57]) — to be retired once the tool replaces it.
 
@@ -48,26 +48,26 @@ The Sprite is **stateful and reusable across calls**: the agent and the sandbox 
 
 `sandbox_code_task` — input:
 
-| Field | Meaning |
-| --- | --- |
-| `sandboxKey` | Stable id scoping Sprite reuse. Must be tied to the **repo** (e.g. `proj-<projectId>`, since each project has its own repo) so a reused Sprite always matches its clone. Same key → same Sprite. |
-| `repoUrl` | Git URL to clone on first use. **Resolved per project** — it varies from one project to another and may even change over time for the same project; never hard-coded. The caller (the engineer sub-agent / Methods Officer) passes the current project's repo. |
-| `baseBranch` | Branch to start from (default repo default). |
-| `targetBranch` | Branch the agent's work is committed/pushed to. |
-| `task` | The instruction handed to `claude -p` inside the Sprite. |
-| `model` (opt) | Claude model for the in-sandbox run. |
-| `timeoutMs` (opt) | Hard cap for the in-sandbox run. |
+| Field             | Meaning                                                                                                                                                                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sandboxKey`      | Stable id scoping Sprite reuse. Must be tied to the **repo** (e.g. `proj-<projectId>`, since each project has its own repo) so a reused Sprite always matches its clone. Same key → same Sprite.                                                               |
+| `repoUrl`         | Git URL to clone on first use. **Resolved per project** — it varies from one project to another and may even change over time for the same project; never hard-coded. The caller (the engineer sub-agent / Methods Officer) passes the current project's repo. |
+| `baseBranch`      | Branch to start from (default repo default).                                                                                                                                                                                                                   |
+| `targetBranch`    | Branch the agent's work is committed/pushed to.                                                                                                                                                                                                                |
+| `task`            | The instruction handed to `claude -p` inside the Sprite.                                                                                                                                                                                                       |
+| `model` (opt)     | Claude model for the in-sandbox run.                                                                                                                                                                                                                           |
+| `timeoutMs` (opt) | Hard cap for the in-sandbox run.                                                                                                                                                                                                                               |
 
 Output (structured):
 
-| Field | Meaning |
-| --- | --- |
-| `sandboxKey`, `spriteName` | Which sandbox handled it (for traceability + reuse). |
-| `branch`, `headSha`, `pushed` | What landed on GitHub. |
-| `prUrl` (opt) | If the tool also opens/updates a PR. |
-| `summary` | Claude's own synthesis of what it did. |
-| `result`, `costUsd`, `exitCode` | Raw outcome + telemetry. |
-| `logRef` (opt) | Pointer to the full in-sandbox transcript for audit. |
+| Field                           | Meaning                                              |
+| ------------------------------- | ---------------------------------------------------- |
+| `sandboxKey`, `spriteName`      | Which sandbox handled it (for traceability + reuse). |
+| `branch`, `headSha`, `pushed`   | What landed on GitHub.                               |
+| `prUrl` (opt)                   | If the tool also opens/updates a PR.                 |
+| `summary`                       | Claude's own synthesis of what it did.               |
+| `result`, `costUsd`, `exitCode` | Raw outcome + telemetry.                             |
+| `logRef` (opt)                  | Pointer to the full in-sandbox transcript for audit. |
 
 The tool is **idempotent-ish per call** (each call is one bounded Claude turn that ends by pushing). Long-running concerns (a turn that exceeds `timeoutMs`) end the call with a partial result rather than hanging.
 
@@ -96,7 +96,7 @@ This tool is the **execution primitive** under the existing self-evolution desig
 - The sub-agent **reviews the diff with GitHub tools**, iterates by re-calling the tool, and when satisfied emits the work-product + routes to the merge gate.
 - The independent auditor can **read the same PR diff** (GitHub tools) — no dependency on Paperclip's workspace sync to inspect the work.
 
-The Methods Officer governance (criticality registry, acceptance criteria, gates, production-ready registry) is unchanged; only the *implementation step* swaps "run agent in sandbox env" for "agent calls the sandbox tool."
+The Methods Officer governance (criticality registry, acceptance criteria, gates, production-ready registry) is unchanged; only the _implementation step_ swaps "run agent in sandbox env" for "agent calls the sandbox tool."
 
 ## 7. Risks / open questions
 
@@ -112,7 +112,7 @@ The Methods Officer governance (criticality registry, acceptance criteria, gates
 2. **Lifecycle**: `sandboxKey` reuse (warm/cold), `sandbox_release`, idle reaper, concurrency cap.
 3. **Secure creds**: PAT from Secrets Manager (spike) → GitHub App token (production).
 4. **Integrate** into the Methods Officer loop (engineer sub-agent calls the tool; auditor reviews via GitHub tools).
-5. **Retire** the sandbox *environment driver* and the Paperclip retry-env patch ([#57]) once the tool supersedes them; keep the reliable-transport helpers ([#55]/[#56]) in the tool.
+5. **Retire** the sandbox _environment driver_ and the Paperclip retry-env patch ([#57]) once the tool supersedes them; keep the reliable-transport helpers ([#55]/[#56]) in the tool.
 
 [#55]: stdin forwarding fix (merged)
 [#56]: reliable large-output exec (merged)
