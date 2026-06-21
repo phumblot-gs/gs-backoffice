@@ -305,3 +305,95 @@ export async function reportProgress(
   }
   return { status: parsed.status ?? 'updated', identifier: parsed.identifier };
 }
+
+// ---------------------------------------------------------------------------
+// GitHub PR + diff review (1b). The bridge talks to GitHub directly using the
+// container's scoped tokens (read for diffs, push for PRs) — the token value never
+// enters the agent's context, so the orchestrator needs no GitHub credential or shell.
+// ---------------------------------------------------------------------------
+
+const GITHUB_API = 'https://api.github.com';
+
+/** Parse `owner/repo` from a github.com clone URL (https or ssh form). */
+export function parseGitHubRepo(repoUrl: string): { owner: string; repo: string } {
+  const m = repoUrl.trim().match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (!m) throw new Error(`agent-sandbox-mcp: cannot parse owner/repo from "${repoUrl}".`);
+  return { owner: m[1], repo: m[2] };
+}
+
+/** The container's GitHub token for the requested access mode (read vs push). */
+export function githubToken(mode: 'read' | 'push', env: NodeJS.ProcessEnv = process.env): string {
+  const get = (k: string) => (env[k] ?? '').trim();
+  const combined = get('SANDBOX_GITHUB_TOKEN');
+  const token =
+    mode === 'push'
+      ? get('SANDBOX_GITHUB_PUSH_TOKEN') || combined
+      : get('SANDBOX_GITHUB_READ_TOKEN') || combined;
+  if (!token) {
+    throw new Error(
+      `agent-sandbox-mcp: no GitHub ${mode} token available (set SANDBOX_GITHUB_${mode === 'push' ? 'PUSH' : 'READ'}_TOKEN or SANDBOX_GITHUB_TOKEN).`,
+    );
+  }
+  return token;
+}
+
+function ghHeaders(token: string, accept = 'application/vnd.github+json'): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: accept,
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'gs-agent-sandbox-mcp',
+  };
+}
+
+/** Open a pull request for a pushed branch. Uses the push-scoped token. */
+export async function openPr(
+  input: { repoUrl: string; head: string; base?: string; title: string; body?: string },
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ number: number; url: string }> {
+  const { owner, repo } = parseGitHubRepo(input.repoUrl);
+  const token = githubToken('push', env);
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: input.title,
+      head: input.head,
+      base: input.base || 'main',
+      body: input.body || '',
+    }),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(`agent-sandbox-mcp: open_pr → HTTP ${res.status}: ${raw.slice(0, 600)}`);
+  }
+  const j = JSON.parse(raw) as { number?: number; html_url?: string };
+  return { number: j.number ?? 0, url: j.html_url ?? '' };
+}
+
+/** Return the unified diff of base...head for review. Uses the read-scoped token. */
+export async function getDiff(
+  input: { repoUrl: string; base: string; head: string; maxBytes?: number },
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
+  const { owner, repo } = parseGitHubRepo(input.repoUrl);
+  const token = githubToken('read', env);
+  const range = `${encodeURIComponent(input.base)}...${encodeURIComponent(input.head)}`;
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/compare/${range}`;
+  const res = await fetchImpl(url, {
+    method: 'GET',
+    headers: ghHeaders(token, 'application/vnd.github.diff'),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(`agent-sandbox-mcp: get_diff → HTTP ${res.status}: ${raw.slice(0, 600)}`);
+  }
+  const max = input.maxBytes && input.maxBytes > 0 ? input.maxBytes : 50_000;
+  if (raw.length > max) {
+    return `${raw.slice(0, max)}\n\n[...diff truncated at ${max} bytes; refine with a narrower base...head or review per-file...]`;
+  }
+  return raw || '(no changes between base and head)';
+}
