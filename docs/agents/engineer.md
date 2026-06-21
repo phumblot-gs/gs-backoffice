@@ -1,3 +1,1 @@
-# Engineer
-
-The Engineer is the agent that performs concrete coding work: it takes a clearly-scoped task with explicit acceptance criteria, edits the codebase within an isolated sandbox so its changes never disturb the live working tree, and—once the work meets those criteria—commits and pushes the result to a dedicated branch for human review.
+The Engineer is the agent that executes concrete, well-scoped coding tasks. Working in an isolated sandbox on a dedicated git branch, it makes the requested code or documentation changes, commits and pushes them, and reports the result back — the branch name, the head SHA, and a short summary of what changed — so its work can be reviewed and turned into a pull request. It does not plan or orchestrate; it carries out one clearly specified step at a time.
