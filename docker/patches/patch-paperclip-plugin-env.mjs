@@ -18,8 +18,6 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
-const MARKER = 'SANDBOX_GITHUB_TOKEN';
-
 function findPluginLoaderJs() {
   const roots = [];
   try {
@@ -65,24 +63,35 @@ const REPLACEMENT = `const ADAPTER_ENV_PASSTHROUGH = [
     "SANDBOX_GITHUB_PUSH_TOKEN",
 ];`;
 
+// The passthrough only applies to plugins with `environment.drivers.register`.
+// Our sandbox plugin is tools+jobs only (the env driver was retired), so the gate
+// must also accept `agent.tools.register` — else the tool worker gets no secrets.
+const GATE_ANCHOR = `const canRegisterEnvironmentDrivers = Array.isArray(input.manifest.capabilities)
+        && input.manifest.capabilities.includes("environment.drivers.register");`;
+const GATE_REPLACEMENT = `const canRegisterEnvironmentDrivers = Array.isArray(input.manifest.capabilities)
+        && (input.manifest.capabilities.includes("environment.drivers.register")
+            || input.manifest.capabilities.includes("agent.tools.register"));`;
+
 const file = findPluginLoaderJs();
 let src = readFileSync(file, 'utf8');
 
-if (src.includes(MARKER)) {
-  console.log(`[patch] ${MARKER} already in ADAPTER_ENV_PASSTHROUGH (${file}) — skipping.`);
-  process.exit(0);
+function applyEdit(label, anchor, replacement) {
+  if (src.includes(replacement)) {
+    console.log(`[patch] ${label} already applied — skipping.`);
+    return;
+  }
+  const count = src.split(anchor).length - 1;
+  if (count !== 1) {
+    throw new Error(
+      `[patch] expected exactly 1 ${label} anchor in ${file}, found ${count}. ` +
+        `The @paperclipai/server internals changed — review and update this patch.`,
+    );
+  }
+  src = src.replace(anchor, replacement);
+  console.log(`[patch] applied ${label}.`);
 }
 
-const count = src.split(ANCHOR).length - 1;
-if (count !== 1) {
-  throw new Error(
-    `[patch] expected exactly 1 ADAPTER_ENV_PASSTHROUGH anchor in ${file}, found ${count}. ` +
-      `The @paperclipai/server internals changed — review and update this patch.`,
-  );
-}
-
-src = src.replace(ANCHOR, REPLACEMENT);
+applyEdit('ADAPTER_ENV_PASSTHROUGH tokens', ANCHOR, REPLACEMENT);
+applyEdit('env-passthrough gate (accept agent.tools.register)', GATE_ANCHOR, GATE_REPLACEMENT);
 writeFileSync(file, src);
-console.log(
-  `[patch] added SPRITES_TOKEN + SANDBOX_GITHUB_TOKEN to ADAPTER_ENV_PASSTHROUGH in ${file}`,
-);
+console.log(`[patch] plugin-env patches applied to ${file}`);
