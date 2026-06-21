@@ -87,6 +87,55 @@ const manifest: PaperclipPluginManifestV1 = {
         },
       },
     },
+    {
+      name: 'sandbox_code_task',
+      displayName: 'Run a coding task with Claude in a sandbox',
+      description:
+        'Run Claude in an isolated, reusable Fly Sprite to perform a coding task on a branch, then commit and push the result to GitHub from inside the sandbox. Reuses the sandbox keyed by `sandboxKey` (re-invoke to iterate). Returns branch, head SHA, and Claude’s summary.',
+      parametersSchema: {
+        type: 'object',
+        required: ['sandboxKey', 'repoUrl', 'targetBranch', 'task'],
+        additionalProperties: false,
+        properties: {
+          sandboxKey: {
+            type: 'string',
+            description: 'Stable id scoping Sprite reuse (tie to repo + issue, e.g. "eng-GRA-12").',
+          },
+          repoUrl: { type: 'string', description: 'Git URL to clone (per project).' },
+          baseBranch: {
+            type: 'string',
+            description: 'Branch to start from when the target branch is new (default "main").',
+          },
+          targetBranch: { type: 'string', description: 'Branch to commit + push the work to.' },
+          task: {
+            type: 'string',
+            description: 'Instruction for Claude (it edits files; the tool commits + pushes).',
+          },
+          model: { type: 'string', description: 'Optional Claude model for the in-sandbox run.' },
+          timeoutMs: {
+            type: 'number',
+            description: 'Hard wall-clock limit (ms; host caps at 15min).',
+          },
+        },
+      },
+    },
+    {
+      name: 'sandbox_release',
+      displayName: 'Release (delete) a sandbox',
+      description:
+        'Delete the Fly Sprite for a `sandboxKey`. Call when the work is done; the durable result is the pushed branch/PR, so this loses nothing.',
+      parametersSchema: {
+        type: 'object',
+        required: ['sandboxKey'],
+        additionalProperties: false,
+        properties: {
+          sandboxKey: {
+            type: 'string',
+            description: 'The sandbox to release (same key used to run it).',
+          },
+        },
+      },
+    },
   ],
   environmentDrivers: [
     {

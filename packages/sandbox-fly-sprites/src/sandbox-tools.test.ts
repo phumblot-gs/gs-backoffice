@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { buildGitCredentialSetup, buildCheckoutScript, SANDBOX_WORK_DIR } from './sandbox.js';
-import { spriteNameForKey, parseSandboxRunParams } from './tools.js';
+import {
+  buildGitCredentialSetup,
+  buildCheckoutScript,
+  buildCodeTaskCheckoutScript,
+  SANDBOX_WORK_DIR,
+} from './sandbox.js';
+import { spriteNameForKey, parseSandboxRunParams, parseCodeTaskParams } from './tools.js';
 
 describe('buildGitCredentialSetup', () => {
   it('uses a credential helper reading $GH_TOKEN (no token in url/config)', () => {
@@ -79,5 +84,54 @@ describe('parseSandboxRunParams', () => {
     const r = parseSandboxRunParams({ sandboxKey: 'k', repoUrl: 'u', ref: 'r' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/command/);
+  });
+});
+
+describe('buildCodeTaskCheckoutScript', () => {
+  it('continues an existing target branch, else branches from base', () => {
+    const s = buildCodeTaskCheckoutScript({
+      repoUrl: 'https://github.com/org/repo.git',
+      baseBranch: 'main',
+      targetBranch: 'eng/x',
+      workDir: SANDBOX_WORK_DIR,
+    });
+    expect(s).toContain('git clone');
+    expect(s).toContain('git remote get-url origin');
+    expect(s).toContain('refs/remotes/origin/$TB'); // continue target branch if it exists
+    expect(s).toContain('git checkout -B "$TB" "origin/$TB"');
+    expect(s).toContain('git checkout -B "$TB" "origin/$BB"'); // else from base
+    expect(s).toContain('credential.helper');
+  });
+});
+
+describe('parseCodeTaskParams', () => {
+  it('accepts a complete payload', () => {
+    const r = parseCodeTaskParams({
+      sandboxKey: 'eng-1',
+      repoUrl: 'https://x/r.git',
+      baseBranch: 'develop',
+      targetBranch: 'eng/feat',
+      task: 'add a file',
+      model: 'claude-x',
+      timeoutMs: 120000,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.baseBranch).toBe('develop');
+      expect(r.value.targetBranch).toBe('eng/feat');
+      expect(r.value.timeoutMs).toBe(120000);
+    }
+  });
+
+  it('defaults baseBranch to main', () => {
+    const r = parseCodeTaskParams({ sandboxKey: 'k', repoUrl: 'u', targetBranch: 't', task: 'do' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.baseBranch).toBe('main');
+  });
+
+  it('rejects missing task', () => {
+    const r = parseCodeTaskParams({ sandboxKey: 'k', repoUrl: 'u', targetBranch: 't' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/task/);
   });
 });
