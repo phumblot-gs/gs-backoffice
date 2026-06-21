@@ -42,6 +42,12 @@ export class ProxyConfigError extends Error {}
  * Read the proxy config from the (inherited) Paperclip run env. The claude_local
  * adapter sets PAPERCLIP_API_URL / PAPERCLIP_API_KEY / PAPERCLIP_RUN_ID and
  * buildPaperclipEnv adds PAPERCLIP_AGENT_ID / PAPERCLIP_COMPANY_ID.
+ *
+ * NOTE: `projectId` is NOT required here. The executeTool route mandates a
+ * `runContext.projectId`, but the claude_local adapter does not expose a project id
+ * to the run's env (and `PAPERCLIP_*` keys set via adapterConfig.env do not propagate
+ * to the MCP child on Local runs — verified on staging). So projectId is resolved
+ * separately via `resolveProjectId` (env override → first authorized company project).
  */
 export function readProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig {
   const get = (k: string) => (env[k] ?? '').trim();
@@ -92,6 +98,73 @@ type FetchLike = (
   text: () => Promise<string>;
 }>;
 
+// Resolved once per process (the answer is stable for the run's identity).
+let cachedProjectId: string | null = null;
+
+/** Test-only: clear the resolved-project cache. */
+export function __resetProjectCache(): void {
+  cachedProjectId = null;
+}
+
+/**
+ * Resolve the `projectId` to send in runContext. Priority:
+ *   1. `PAPERCLIP_PROJECT_ID` env (explicit override, if it ever propagates).
+ *   2. The first project the actor is authorized for in its company
+ *      (`GET /api/companies/{companyId}/projects`). The route only checks that the
+ *      project belongs to the company, and the sandbox plugin does not use projectId,
+ *      so any authorized company project satisfies the gate. Cached after first call.
+ */
+export async function resolveProjectId(
+  cfg: ProxyConfig,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<string> {
+  if (cfg.runContext.projectId) return cfg.runContext.projectId;
+  if (cachedProjectId) return cachedProjectId;
+
+  const url = `${cfg.apiUrl}/api/companies/${cfg.runContext.companyId}/projects`;
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+    });
+  } catch (err) {
+    throw new Error(
+      `agent-sandbox-mcp: failed to list projects at ${url}: ${(err as Error).message}`,
+    );
+  }
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `agent-sandbox-mcp: cannot resolve projectId (GET projects → HTTP ${res.status}): ${raw.slice(0, 400)}`,
+    );
+  }
+  let list: unknown;
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `agent-sandbox-mcp: cannot resolve projectId — non-JSON projects response: ${raw.slice(0, 200)}`,
+    );
+  }
+  const arr = (
+    Array.isArray(list)
+      ? list
+      : ((list as { projects?: unknown[]; data?: unknown[] }).projects ??
+        (list as { data?: unknown[] }).data ??
+        [])
+  ) as Array<{ id?: string }>;
+  const first = arr.find((p) => typeof p?.id === 'string')?.id;
+  if (!first) {
+    throw new Error(
+      `agent-sandbox-mcp: cannot resolve a projectId — the run actor has no authorized projects in company ${cfg.runContext.companyId}. ` +
+        `Set PAPERCLIP_PROJECT_ID or grant the agent a project.`,
+    );
+  }
+  cachedProjectId = first;
+  return first;
+}
+
 /**
  * Proxy one tool call to the deployed plugin's executeTool route.
  * Throws on transport / HTTP / tool errors with a readable message.
@@ -102,11 +175,12 @@ export async function executeSandboxTool(
   parameters: Record<string, unknown>,
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
 ): Promise<ProxyResult> {
+  const projectId = await resolveProjectId(cfg, fetchImpl);
   const url = `${cfg.apiUrl}/api/plugins/tools/execute`;
   const body = JSON.stringify({
     tool: `${SANDBOX_PLUGIN_ID}:${toolName}`,
     parameters,
-    runContext: cfg.runContext,
+    runContext: { ...cfg.runContext, projectId },
   });
 
   let res;
