@@ -169,6 +169,12 @@ resource "aws_ecs_task_definition" "paperclip" {
         valueFrom = "${var.app_secrets_arn}:SPRITES_TOKEN::"
       },
       {
+        # GitHub token for the sandbox tools (clone/push from inside a Sprite).
+        # Forwarded to the plugin worker via the ADAPTER_ENV_PASSTHROUGH patch.
+        name      = "SANDBOX_GITHUB_TOKEN"
+        valueFrom = "${var.app_secrets_arn}:SANDBOX_GITHUB_TOKEN::"
+      },
+      {
         name      = "PAPERCLIP_SECRETS_MASTER_KEY"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_SECRETS_MASTER_KEY::"
       },

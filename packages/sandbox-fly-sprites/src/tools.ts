@@ -80,24 +80,25 @@ const SANDBOX_RUN_SCHEMA = {
   },
 } as const;
 
-/** Resolve a secret by the configured reference name (operator config → secret value). */
-async function resolveRef(
-  ctx: PluginContext,
+/**
+ * Read a token from the worker env. In Paperclip 2026.609.0 a plugin tool has no
+ * working secret-resolution path (ctx.secrets.resolve is hard-disabled; ctx.config
+ * returns unresolved config), so secrets reach the worker via the env passthrough
+ * (SPRITES_TOKEN, SANDBOX_GITHUB_TOKEN, ANTHROPIC_API_KEY — injected by Terraform,
+ * forwarded by our plugin-loader patch). An optional config field can override the
+ * env-var name. Pure-ish (reads process.env).
+ */
+function envSecret(
   cfg: Record<string, unknown>,
-  key: string,
-  fallbackRef: string,
-): Promise<string | undefined> {
-  const ref =
-    typeof cfg[key] === 'string' && (cfg[key] as string).trim()
-      ? (cfg[key] as string).trim()
-      : fallbackRef;
-  if (!ref) return undefined;
-  try {
-    const value = await ctx.secrets.resolve(ref);
-    return value && value.trim() ? value : undefined;
-  } catch {
-    return undefined;
-  }
+  overrideKey: string,
+  defaultEnvName: string,
+): string | undefined {
+  const envName =
+    typeof cfg[overrideKey] === 'string' && (cfg[overrideKey] as string).trim()
+      ? (cfg[overrideKey] as string).trim()
+      : defaultEnvName;
+  const value = process.env[envName];
+  return value && value.trim() ? value : undefined;
 }
 
 export function registerSandboxTools(ctx: PluginContext): void {
@@ -119,18 +120,16 @@ export function registerSandboxTools(ctx: PluginContext): void {
         typeof cfg.region === 'string' && cfg.region.trim() ? cfg.region.trim() : 'cdg';
       const timeoutMs = typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : undefined;
 
-      const spritesToken = await resolveRef(ctx, cfg, 'spritesTokenRef', 'SPRITES_TOKEN');
+      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
       if (!spritesToken) {
         return {
-          error: 'Fly Sprites token not configured (set spritesTokenRef to a secret name).',
+          error:
+            'Fly Sprites token unavailable in the worker env (expected SPRITES_TOKEN; ensure the plugin-loader env passthrough patch is applied and the secret is set).',
         };
       }
-      const githubToken = await resolveRef(
-        ctx,
-        cfg,
-        input.credMode === 'push' ? 'githubPushTokenRef' : 'githubReadTokenRef',
-        '',
-      );
+      // Single GitHub token for now (read + push); the read/push split is a future
+      // hardening (separate tokens / GitHub App).
+      const githubToken = envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
 
       const client = flyClient(spritesToken);
       const name = spriteNameForKey(input.sandboxKey);

@@ -17,31 +17,27 @@ const manifest: PaperclipPluginManifestV1 = {
     'Provisions Fly Sprites (Firecracker microVMs) as isolated Paperclip execution environments.',
   author: 'GRAFMAKER',
   categories: ['automation'],
-  capabilities: ['environment.drivers.register', 'agent.tools.register', 'secrets.read-ref'],
+  // `environment.drivers.register` is also what gates the worker env passthrough
+  // (SPRITES_TOKEN / SANDBOX_GITHUB_TOKEN / ANTHROPIC_API_KEY) the sandbox tools rely on.
+  capabilities: ['environment.drivers.register', 'agent.tools.register'],
   entrypoints: {
     worker: './dist/worker.js',
   },
-  // Operator config for the sandbox tools (secret-reference names + defaults).
+  // Operator config for the sandbox tools. Secrets are NOT here — they reach the
+  // worker via the env passthrough (see docker/patches/patch-paperclip-plugin-env.mjs);
+  // these fields only let an operator override the env-var NAMES and defaults.
   instanceConfigSchema: {
     type: 'object',
     properties: {
-      spritesTokenRef: {
+      spritesTokenEnv: {
         type: 'string',
-        description: 'Secret name resolving to the Fly Sprites API token.',
+        description: 'Env var name holding the Fly Sprites API token (default SPRITES_TOKEN).',
         default: 'SPRITES_TOKEN',
       },
-      githubReadTokenRef: {
+      githubTokenEnv: {
         type: 'string',
-        description: 'Secret name for a read-only GitHub token (clone/fetch in verification runs).',
-      },
-      githubPushTokenRef: {
-        type: 'string',
-        description: 'Secret name for a push-capable GitHub token (used by sandbox_code_task).',
-      },
-      anthropicKeyRef: {
-        type: 'string',
-        description: 'Secret name for the Anthropic API key (used by sandbox_code_task).',
-        default: 'ANTHROPIC_API_KEY',
+        description: 'Env var name holding the GitHub token (default SANDBOX_GITHUB_TOKEN).',
+        default: 'SANDBOX_GITHUB_TOKEN',
       },
       region: {
         type: 'string',
