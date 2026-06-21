@@ -4,22 +4,39 @@ const PLUGIN_ID = 'gs-backoffice.fly-sprites-sandbox-provider';
 const PLUGIN_VERSION = '0.1.0';
 
 /**
- * Sandbox provider plugin that runs agent code in Fly Sprites — Firecracker
- * microVMs with EU regions, hibernate-when-idle, and fast checkpoints. Registered
- * as the `fly-sprites` environment driver; the driver is lease-based (see plugin.ts).
+ * Fly Sprites sandbox plugin. Exposes the sandbox TOOLS (sandbox_run,
+ * sandbox_code_task, sandbox_release) + an idle reaper job. Agents drive the
+ * sandbox via tools (agent on Local calls a tool), not by running "on" a sandbox
+ * environment — the legacy environment driver has been retired.
+ * See docs/architecture/sandbox-code-tool.md.
  */
 const manifest: PaperclipPluginManifestV1 = {
   id: PLUGIN_ID,
   apiVersion: 1,
   version: PLUGIN_VERSION,
-  displayName: 'Fly Sprites Sandbox Provider',
+  displayName: 'Fly Sprites Sandbox Tools',
   description:
-    'Provisions Fly Sprites (Firecracker microVMs) as isolated Paperclip execution environments.',
+    'Agent tools to run commands and Claude coding tasks in isolated Fly Sprite microVMs (sandbox_run, sandbox_code_task, sandbox_release), with an idle reaper.',
   author: 'GRAFMAKER',
   categories: ['automation'],
-  // `environment.drivers.register` is also what gates the worker env passthrough
-  // (SPRITES_TOKEN / SANDBOX_GITHUB_TOKEN / ANTHROPIC_API_KEY) the sandbox tools rely on.
-  capabilities: ['environment.drivers.register', 'agent.tools.register'],
+  // The worker env passthrough (SPRITES_TOKEN / SANDBOX_GITHUB_* / ANTHROPIC_API_KEY)
+  // is gated on `agent.tools.register` by our plugin-env patch (the env driver, which
+  // previously satisfied that gate, has been retired).
+  capabilities: [
+    'agent.tools.register',
+    'jobs.schedule',
+    'plugin.state.read',
+    'plugin.state.write',
+  ],
+  // Idle reaper: hourly job that deletes sandbox Sprites idle beyond the TTL.
+  jobs: [
+    {
+      jobKey: 'sandbox-reaper',
+      displayName: 'Sandbox idle reaper',
+      description: 'Delete sandbox Sprites idle beyond the configured TTL (default 7 days).',
+      schedule: '0 * * * *',
+    },
+  ],
   entrypoints: {
     worker: './dist/worker.js',
   },
@@ -36,8 +53,27 @@ const manifest: PaperclipPluginManifestV1 = {
       },
       githubTokenEnv: {
         type: 'string',
-        description: 'Env var name holding the GitHub token (default SANDBOX_GITHUB_TOKEN).',
+        description:
+          'Env var name for the combined GitHub token, used when no read/push split is set (default SANDBOX_GITHUB_TOKEN).',
         default: 'SANDBOX_GITHUB_TOKEN',
+      },
+      githubReadTokenEnv: {
+        type: 'string',
+        description:
+          'Env var name for a read-only GitHub token (verification / sandbox_run). Falls back to the combined token.',
+        default: 'SANDBOX_GITHUB_READ_TOKEN',
+      },
+      githubPushTokenEnv: {
+        type: 'string',
+        description:
+          'Env var name for a push-capable GitHub token (sandbox_code_task). Falls back to the combined token.',
+        default: 'SANDBOX_GITHUB_PUSH_TOKEN',
+      },
+      reaperTtlDays: {
+        type: 'number',
+        description:
+          'Idle-reaper TTL in days: sandboxes unused longer than this are deleted (default 7).',
+        default: 7,
       },
       region: {
         type: 'string',
@@ -132,46 +168,6 @@ const manifest: PaperclipPluginManifestV1 = {
           sandboxKey: {
             type: 'string',
             description: 'The sandbox to release (same key used to run it).',
-          },
-        },
-      },
-    },
-  ],
-  environmentDrivers: [
-    {
-      driverKey: 'fly-sprites',
-      kind: 'sandbox_provider',
-      displayName: 'Fly Sprites',
-      description:
-        'Runs commands in a Fly Sprite (Firecracker microVM). Sprites hibernate when idle and wake on demand, so leases can be reused cheaply.',
-      configSchema: {
-        type: 'object',
-        properties: {
-          apiKey: {
-            type: 'string',
-            format: 'secret-ref',
-            description:
-              'Fly Sprites API token (from sprites.dev). Paste a value or a Paperclip secret reference; falls back to SPRITES_TOKEN if omitted.',
-          },
-          region: {
-            type: 'string',
-            description: "Fly region to pin the Sprite to (e.g. 'cdg' Paris, 'fra' Frankfurt).",
-            default: 'cdg',
-          },
-          image: {
-            type: 'string',
-            description: 'Base image/template for the Sprite. Defaults to the provider default.',
-          },
-          timeoutMs: {
-            type: 'number',
-            description: 'Per-command timeout in milliseconds. Defaults to 1 hour.',
-            default: 3600000,
-          },
-          reuseLease: {
-            type: 'boolean',
-            description:
-              'Reuse a hibernated Sprite across runs instead of destroying it on release.',
-            default: true,
           },
         },
       },

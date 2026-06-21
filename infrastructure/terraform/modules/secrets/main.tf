@@ -28,9 +28,14 @@ resource "aws_secretsmanager_secret_version" "app" {
     GOOGLE_CHAT_WEBHOOKS = "{}"
     # Fly Sprites API token (sprites.dev) for the sandbox-provider plugin.
     SPRITES_TOKEN = "CHANGE_ME"
-    # GitHub token for the sandbox tools (clone/push from inside a Sprite).
-    # Fine-grained PAT (contents + PR rw) for now; GitHub App token in production.
-    SANDBOX_GITHUB_TOKEN = "CHANGE_ME"
+    # GitHub token(s) for the sandbox tools (clone/push from inside a Sprite).
+    # Fine-grained PATs for now; GitHub App tokens in production.
+    #  - SANDBOX_GITHUB_TOKEN: combined fallback (contents + PR rw).
+    #  - SANDBOX_GITHUB_READ_TOKEN: read-only (verification / sandbox_run).
+    #  - SANDBOX_GITHUB_PUSH_TOKEN: push-capable (sandbox_code_task).
+    SANDBOX_GITHUB_TOKEN      = "CHANGE_ME"
+    SANDBOX_GITHUB_READ_TOKEN = "CHANGE_ME"
+    SANDBOX_GITHUB_PUSH_TOKEN = "CHANGE_ME"
     # Stable key for Paperclip's local_encrypted secret store, so company secrets
     # survive redeploys on ephemeral Fargate (entrypoint writes it to master.key).
     PAPERCLIP_SECRETS_MASTER_KEY = "CHANGE_ME"
