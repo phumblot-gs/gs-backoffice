@@ -10,7 +10,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readProxyConfig, executeSandboxTool, type SandboxToolName } from './proxy.js';
+import {
+  readProxyConfig,
+  executeSandboxTool,
+  reportProgress,
+  REPORT_STATUSES,
+  type SandboxToolName,
+} from './proxy.js';
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], isError };
@@ -89,6 +95,38 @@ export function createServer(): McpServer {
       sandboxKey: z.string().describe('The sandbox to release (same key used to run it).'),
     },
     (args) => call('sandbox_release', args),
+  );
+
+  server.tool(
+    'report_progress',
+    'Update YOUR current issue: set its status and/or post a comment. Use this to report results and move the issue to a final state (done / blocked / in_review) — it replaces shell+curl calls to the Paperclip API. Targets the current issue by default.',
+    {
+      status: z
+        .enum(REPORT_STATUSES)
+        .optional()
+        .describe('New issue status (e.g. "done", "blocked", "in_review"). Omit to only comment.'),
+      comment: z.string().optional().describe('Markdown comment to post on the issue.'),
+      issueId: z
+        .string()
+        .optional()
+        .describe('Issue to update; defaults to the current issue (PAPERCLIP_TASK_ID).'),
+    },
+    async (args) => {
+      let cfg;
+      try {
+        cfg = readProxyConfig();
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+      try {
+        const r = await reportProgress(cfg, args);
+        return textResult(
+          `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}).`.trim(),
+        );
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+    },
   );
 
   return server;
