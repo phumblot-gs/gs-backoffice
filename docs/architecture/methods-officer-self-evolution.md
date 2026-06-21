@@ -147,9 +147,17 @@ Each evolution runs on its own `operator_branch`, disposable once its PR merges 
 
 ## 10. Execution environment & sandbox isolation
 
-Agents must execute code **in isolation**, never in the Paperclip container itself. The default **Local** environment (`driver: local`) runs ON the Paperclip ECS container, so a code agent there could read the container's plaintext secrets (incl. the `ANTHROPIC_API_KEY` the agent API returns in clear) — unacceptable. We therefore run agents in a **sandbox provider**.
+> **Update (2026-06-21) — the execution model below is SUPERSEDED.** We pivoted from running the agent _on_ a Fly sandbox **environment** (the lease-based driver described in this section) to exposing the sandbox as a **set of agent TOOLS**. The environment driver was built, hit a wall (a Paperclip liveness watchdog killed long in-sandbox runs and auto-retried them onto Local; the post-run `tar` workspace-restore truncated over the SDK WebSocket), and has since been **retired** (PR #65). The current, validated model is documented in [`sandbox-code-tool.md`](./sandbox-code-tool.md):
+>
+> - The Engineer/QA/Auditor agents run on **Local** (cheap, no env-binding ceremony) and **call tools** — they never execute untrusted code on the container themselves.
+> - **`sandbox_code_task`** runs `claude -p` inside a reusable Fly Sprite, then **commits + pushes a branch to GitHub from inside the Sprite** (no `tar` sync at all). The agent reviews the diff via GitHub tools and re-invokes the tool to iterate in the **same** Sprite (keyed by `sandboxKey`).
+> - **`sandbox_run`** runs an arbitrary command (tests, scanners, pentest, lint, build) in a Sprite with the repo checked out at a ref — **read-only**, for verification / acceptance-criteria checks.
+> - **`sandbox_release`** deletes a Sprite; an hourly **idle reaper** (TTL 7 days) deletes abandoned ones.
+> - Secrets reach the tool worker via a baked env-passthrough patch, gated on `agent.tools.register`; credentials are split **read-only** (`sandbox_run`) vs **push** (`sandbox_code_task`).
+>
+> The rest of §10 is kept as the **record of the retired approach** and why it was explored. The repo-binding setup in "The rest of the setup" (project / `setupCommand` / agent env) is **no longer needed** — the tools own clone + checkout + push internally, per-`repoUrl`.
 
-### Decision: Fly **Sprites** via a custom Paperclip sandbox-provider plugin
+### Decision: Fly **Sprites** via a custom Paperclip sandbox-provider plugin _(retired — see the update note above)_
 
 - **Provider = Fly Sprites** (`sprites.dev`): Firecracker microVMs, EU regions (cdg/fra), hibernate-when-idle (0 idle cost) + instant wake + ~300ms checkpoints. Chosen for Fly's compliance package (**SOC 2 Type 2 report + pre-signed GDPR DPA**, Enterprise/NDA).
 - **No ready Paperclip plugin for Fly** (shipped providers = E2B/Cloudflare/Daytona/Modal/self-hosted-K8s), so we build a **custom `SandboxProvider` plugin** — confirmed feasible and bounded (see below).
@@ -199,16 +207,18 @@ This matches our existing custom-`Dockerfile.paperclip` pattern.
 
 _Resolved during scoping (Steps 0 / 0.5, 2026-06-20):_ the sandbox-provider contract is complete and usable in 2026.609.0; the repo/token flow is not a provider concern (exec + setupCommand); a custom plugin deploys durably on Fargate via bake-into-image + idempotent local-path `plugin install` (no private registry, no EFS).
 
+_Resolved 2026-06-21 (post-pivot to sandbox-as-tool):_ **(1) GitHub credentials now exist** — `SANDBOX_GITHUB_READ_TOKEN` (read-only, used by `sandbox_run`) and `SANDBOX_GITHUB_PUSH_TOKEN` (push, used by `sandbox_code_task`) are stored in the staging secret and delivered to the tool worker via the env-passthrough patch. The per-repo JSON-map identity (item 1) is still the long-term direction; today a single read/push pair serves gs-backoffice. **(2)** The tools clone + push per-`repoUrl`, so no project `setupCommand` / agent env-binding is required. **Still outstanding: the xAI key** for the `grok_local` Auditor (item 3), Fly Enterprise/DPA confirmations (item 4), and test-tooling-in-image for High/Critical (item 5).
+
 ## 12. Phased build plan
 
-- **Phase A — Proof of concept (de-risk execution)** — concrete sequence:
-  - **A1. Scaffold the Fly Sprites provider plugin** — a new package `packages/plugins/sandbox-fly-sprites` (TS, `@paperclipai/plugin-sdk`, `definePlugin`), manifest declaring the `fly-sprites` `sandbox_provider` driver + `SPRITES_TOKEN` as `secret-ref` + `region`/`image` config. Unit-test the pure bits.
-  - **A2. Implement the lease lifecycle** against the Sprites API/SDK: `validateConfig`, `probe`, `acquireLease` (create), `execute` (exec + stdin staging), `realizeWorkspace` (mkdir), `resumeLease`/`releaseLease` (hibernate) and `destroyLease` (delete).
-  - **A3. Deploy path** — bake the built plugin into `docker/Dockerfile.paperclip`; entrypoint `paperclipai plugin install <local-path>` (idempotent). Verify on staging that the `fly-sprites` driver appears in `environments/capabilities`.
-  - **A4. Create the Fly-Sprites environment** (EU region) + a **project** bound to `gs-backoffice` (`git_repo`, `operator_branch`, authenticated `setupCommand`). Store `SPRITES_TOKEN` as a Paperclip secret.
-  - **A5. One Methods Officer agent** (`claude_local`, `defaultEnvironmentId =` the Fly env, capped `maxTurnsPerRun`, budget) — auto-approval is now safe because it runs **inside the sandbox**, not on the Paperclip container.
-  - **A6. PoC task** — assign a trivial issue ("add a comment to the README"); observe **branch → edit → push → open a PR**. Success = a real (throwaway) PR opened by the agent; merge stays manual.
-  - Validates the whole uncertain chain (provider ↔ sandbox ↔ repo/token ↔ PR) end-to-end before building Phases B–D.
+- **Phase A — Proof of concept (de-risk execution) — ✅ DONE, then pivoted.** A1–A6 built the Fly Sprites **environment-driver** plugin and proved the full chain end-to-end (provider ↔ sandbox ↔ repo/token ↔ PR): a Methods Officer agent on the Fly env autonomously cloned → branched → edited → committed → pushed → opened a real PR on a throwaway repo (2026-06-20). That validated everything **except environment isolation of the run itself** — and surfaced two Paperclip-side failures (liveness watchdog killing long in-sandbox runs → auto-retry onto Local; `tar` workspace-restore truncating over the SDK WebSocket). **Decision: retire the env driver and expose the sandbox as TOOLS instead** (see §10 update + [`sandbox-code-tool.md`](./sandbox-code-tool.md)). The tool family is built, deployed, and validated on staging:
+  - `sandbox_run` (PR #60), `sandbox_code_task` + `sandbox_release` (PR #63); secrets via env-passthrough (PR #61); RPC timeout raised to 15 min (PR #62); idle reaper + read/push token split (PR #64); env driver + retry patch retired (PR #65).
+  - End-to-end proof (2026-06-21): `sandbox_code_task` ran Claude in a Sprite and pushed a branch; `sandbox_run` cloned a private repo and ran a command (exit 0) through the re-pointed secret gate.
+- **Phase A′ — Wire the Methods Officer to the tools (NEXT).** Give the agent layer access to the three sandbox tools and assemble the iterate loop on the **real** gs-backoffice repo:
+  - **A′1. Tool access** — grant `sandbox_code_task` / `sandbox_run` / `sandbox_release` to the Engineer/QA/Auditor agents (Methods Officer orchestrates). Confirm how 609 scopes plugin tools to agents (per-agent allow-list vs company-wide).
+  - **A′2. Engineer loop** — Methods Officer (or an Engineer child agent) calls `sandbox_code_task` (task + `targetBranch`, keyed by issue), reviews the pushed diff via GitHub tools, and re-invokes to iterate until the change meets the plan; opens/updates a PR.
+  - **A′3. Verification loop** — QA/Auditor agents call `sandbox_run` (read-only) to execute the acceptance-criteria checks (tests, scanners, lint, build; pentest/load per criticality) against the pushed branch, and attach results as work-products.
+  - **A′4. PoC on gs-backoffice** — one trivial-but-real issue end-to-end (code_task → diff review → iterate → sandbox_run verification → PR), merge stays manual.
 - **Phase B — Plan, criteria, decomposition, audit**: planning mode; structured plan + criticality + criteria from the registry; CEO accepts → child issues to Engineer/Security; evidence as work-products; **independent Auditor** (different adapter); Gate 2.
 - **Phase C — Merge-by-requester + CI/CD + recette + housekeeping**: Chat push to the requester with a PR button (Gate 3); CI→Paperclip public trigger after staging deploy; QA/Recette agent + executable cahier; Gate 4 auditor-verified recette; auto-delete + stale-branch housekeeping.
 - **Phase D — Release registry + intake**: production-ready registry (record/list/short description) + `deploy-to-production (...)` per-evolution routine; `request-evolution (...)` intake process; gate notifications to Chat.
