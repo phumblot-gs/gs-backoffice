@@ -1,0 +1,81 @@
+{
+  "version": "2026-06-21.draft1",
+  "levels": {
+    "low": {
+      "description": "Low risk: docs, comments, copy, config tweaks, isolated low-risk refactors with no behaviour change. No data, auth, secrets, or external integrations touched.",
+      "checks": {
+        "lintTypecheck": true,
+        "unitTests": true,
+        "minCoveragePct": null,
+        "integrationTests": false,
+        "e2eRecette": false,
+        "secretScan": true,
+        "dependencyAudit": false,
+        "sast": false,
+        "pentest": false,
+        "loadTest": false,
+        "p95LatencyMs": null
+      },
+      "audit": { "auditors": 1, "tier": "cheap" },
+      "soc2ControlReview": false,
+      "humanRecetteSignoff": false
+    },
+    "medium": {
+      "description": "Normal feature or bug fix scoped to one module/package. No security-sensitive surface (no auth, RBAC, secrets, payments, or prod infra).",
+      "checks": {
+        "lintTypecheck": true,
+        "unitTests": true,
+        "minCoveragePct": 70,
+        "integrationTests": true,
+        "e2eRecette": false,
+        "secretScan": true,
+        "dependencyAudit": true,
+        "sast": false,
+        "pentest": false,
+        "loadTest": false,
+        "p95LatencyMs": null
+      },
+      "audit": { "auditors": 1, "tier": "cheap" },
+      "soc2ControlReview": false,
+      "humanRecetteSignoff": false
+    },
+    "high": {
+      "description": "Cross-cutting or sensitive change: auth/RBAC, data integrity, external integrations, shared libraries, or anything touching multiple agents/services.",
+      "checks": {
+        "lintTypecheck": true,
+        "unitTests": true,
+        "minCoveragePct": 80,
+        "integrationTests": true,
+        "e2eRecette": true,
+        "secretScan": true,
+        "dependencyAudit": true,
+        "sast": true,
+        "pentest": false,
+        "loadTest": false,
+        "p95LatencyMs": null
+      },
+      "audit": { "auditors": 1, "tier": "frontier" },
+      "soc2ControlReview": true,
+      "humanRecetteSignoff": true
+    },
+    "critical": {
+      "description": "High-stakes change: secrets/credential handling, authentication, payment/billing flows, production infrastructure (Terraform/IAM), or anything that could expose data or take the system down.",
+      "checks": {
+        "lintTypecheck": true,
+        "unitTests": true,
+        "minCoveragePct": 80,
+        "integrationTests": true,
+        "e2eRecette": true,
+        "secretScan": true,
+        "dependencyAudit": true,
+        "sast": true,
+        "pentest": true,
+        "loadTest": true,
+        "p95LatencyMs": 1000
+      },
+      "audit": { "auditors": 2, "tier": "frontier" },
+      "soc2ControlReview": true,
+      "humanRecetteSignoff": true
+    }
+  }
+}
