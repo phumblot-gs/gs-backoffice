@@ -38,15 +38,15 @@ variable "db_instance_class" {
 
 # Compute
 variable "paperclip_cpu" {
-  description = "CPU units for Paperclip (256 = 0.25 vCPU)"
+  description = "CPU units for Paperclip (1024 = 1 vCPU). claude_local agents run ON this container (each run spawns the claude CLI + the MCP bridge), so it needs real compute."
   type        = number
-  default     = 256
+  default     = 1024
 }
 
 variable "paperclip_memory" {
-  description = "Memory in MB for Paperclip"
+  description = "Memory in MB for Paperclip. 512MB OOM-killed (exit 137) under the agent self-evolution loop; 3072 gives headroom for a few concurrent claude_local runs."
   type        = number
-  default     = 512
+  default     = 3072
 }
 
 variable "mcp_cpu" {
