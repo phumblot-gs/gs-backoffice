@@ -38,6 +38,11 @@ RUN node /tmp/patch-paperclip-retry-env.mjs && rm -f /tmp/patch-paperclip-retry-
 # tools in 2026.609.0). Anchored + idempotent.
 COPY docker/patches/patch-paperclip-plugin-env.mjs /tmp/patch-paperclip-plugin-env.mjs
 RUN node /tmp/patch-paperclip-plugin-env.mjs && rm -f /tmp/patch-paperclip-plugin-env.mjs
+# Surgical patch: raise the executeTool host→worker RPC timeout from 30s to the
+# 15min host max, so long-running sandbox tools (provision + clone + run / Claude)
+# are not killed at 30s. Anchored + idempotent.
+COPY docker/patches/patch-paperclip-tool-timeout.mjs /tmp/patch-paperclip-tool-timeout.mjs
+RUN node /tmp/patch-paperclip-tool-timeout.mjs && rm -f /tmp/patch-paperclip-tool-timeout.mjs
 RUN mkdir -p /paperclip && chown node:node /paperclip
 # Bake the self-contained plugin at a stable path (outside the instance plugins
 # dir, so Paperclip references it without managing/cleaning it).
