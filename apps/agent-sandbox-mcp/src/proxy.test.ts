@@ -4,6 +4,10 @@ import {
   resolveProjectId,
   executeSandboxTool,
   reportProgress,
+  parseGitHubRepo,
+  githubToken,
+  openPr,
+  getDiff,
   __resetProjectCache,
   ProxyConfigError,
   SANDBOX_PLUGIN_ID,
@@ -246,5 +250,95 @@ describe('reportProgress', () => {
     await expect(reportProgress(CFG_TASK, { status: 'done' }, f)).rejects.toThrow(
       /report_progress → HTTP 422.*bad status/,
     );
+  });
+});
+
+describe('parseGitHubRepo', () => {
+  it('parses https + .git + ssh forms', () => {
+    expect(parseGitHubRepo('https://github.com/org/repo.git')).toEqual({
+      owner: 'org',
+      repo: 'repo',
+    });
+    expect(parseGitHubRepo('https://github.com/org/repo')).toEqual({ owner: 'org', repo: 'repo' });
+    expect(parseGitHubRepo('git@github.com:org/repo.git')).toEqual({ owner: 'org', repo: 'repo' });
+  });
+  it('throws on a non-github url', () => {
+    expect(() => parseGitHubRepo('https://gitlab.com/o/r.git')).toThrow(/cannot parse/);
+  });
+});
+
+describe('githubToken', () => {
+  it('prefers the scoped token, falls back to the combined one', () => {
+    expect(
+      githubToken('push', {
+        SANDBOX_GITHUB_PUSH_TOKEN: 'p',
+        SANDBOX_GITHUB_TOKEN: 'c',
+      } as NodeJS.ProcessEnv),
+    ).toBe('p');
+    expect(githubToken('read', { SANDBOX_GITHUB_TOKEN: 'c' } as NodeJS.ProcessEnv)).toBe('c');
+  });
+  it('throws when no token is present', () => {
+    expect(() => githubToken('push', {} as NodeJS.ProcessEnv)).toThrow(/no GitHub push token/);
+  });
+});
+
+const GH_ENV = {
+  SANDBOX_GITHUB_PUSH_TOKEN: 'push-tok',
+  SANDBOX_GITHUB_READ_TOKEN: 'read-tok',
+} as NodeJS.ProcessEnv;
+
+describe('openPr', () => {
+  it('POSTs to the repo pulls endpoint with the push token and returns number+url', async () => {
+    const cap: { url?: string; init?: RequestInit } = {};
+    const f = fakeFetch(201, { number: 7, html_url: 'https://github.com/org/repo/pull/7' }, cap);
+    const r = await openPr(
+      { repoUrl: 'https://github.com/org/repo.git', head: 'eng/x', title: 'T', body: 'B' },
+      f,
+      GH_ENV,
+    );
+    expect(cap.url).toBe('https://api.github.com/repos/org/repo/pulls');
+    const init = cap.init as RequestInit;
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer push-tok' });
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      head: 'eng/x',
+      base: 'main',
+      title: 'T',
+    });
+    expect(r).toEqual({ number: 7, url: 'https://github.com/org/repo/pull/7' });
+  });
+  it('surfaces a GitHub error', async () => {
+    const f = fakeFetch(422, '{"message":"No commits between main and eng/x"}');
+    await expect(
+      openPr({ repoUrl: 'https://github.com/org/repo.git', head: 'eng/x', title: 'T' }, f, GH_ENV),
+    ).rejects.toThrow(/open_pr → HTTP 422.*No commits/);
+  });
+});
+
+describe('getDiff', () => {
+  it('GETs the compare endpoint with the read token + diff accept header', async () => {
+    const cap: { url?: string; init?: RequestInit } = {};
+    const f = fakeFetch(200, 'diff --git a/x b/x\n+line', cap);
+    const out = await getDiff(
+      { repoUrl: 'https://github.com/org/repo.git', base: 'main', head: 'eng/x' },
+      f,
+      GH_ENV,
+    );
+    expect(cap.url).toBe('https://api.github.com/repos/org/repo/compare/main...eng%2Fx');
+    expect((cap.init as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer read-tok',
+      Accept: 'application/vnd.github.diff',
+    });
+    expect(out).toContain('diff --git');
+  });
+  it('truncates an oversized diff', async () => {
+    const big = 'x'.repeat(120);
+    const f = fakeFetch(200, big);
+    const out = await getDiff(
+      { repoUrl: 'https://github.com/org/repo.git', base: 'main', head: 'h', maxBytes: 50 },
+      f,
+      GH_ENV,
+    );
+    expect(out).toContain('truncated at 50 bytes');
+    expect(out.length).toBeLessThan(big.length + 100);
   });
 });
