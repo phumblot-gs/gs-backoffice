@@ -397,3 +397,136 @@ export async function getDiff(
   }
   return raw || '(no changes between base and head)';
 }
+
+// ---------------------------------------------------------------------------
+// Governance orchestration (Bloc 2 B3). The Methods Officer drives the engineer
+// loop as a living graph of child issues. Because the orchestrator has no shell,
+// creating/reading those child issues are native tools (run-authenticated via the
+// X-Paperclip-Run-Id header, over loopback) — never curl.
+// ---------------------------------------------------------------------------
+
+export interface CreateChildInput {
+  title: string;
+  description?: string;
+  /** Agent to assign the step to (e.g. the Engineer's id). */
+  assigneeAgentId: string;
+  /** Verifiable criteria for THIS step (≤20, each ≤500 chars). */
+  acceptanceCriteria?: string[];
+  /** If true, the parent (the MO's issue) stays blocked until this child is done. */
+  blockParentUntilDone?: boolean;
+  /** Parent issue; defaults to the run's current issue (PAPERCLIP_TASK_ID). */
+  parentId?: string;
+}
+
+/**
+ * Create a child issue (a step) under the run's current issue and assign it. The MO
+ * uses this to decompose/iterate: spawn an Engineer step, get woken when it completes
+ * (native handoff), review, then spawn the next. Run-authenticated.
+ */
+export async function createChildIssue(
+  cfg: ProxyConfig,
+  input: CreateChildInput,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<{ id: string; identifier?: string; status?: string }> {
+  const parentId = (input.parentId || cfg.taskIssueId || '').trim();
+  if (!parentId) {
+    throw new Error(
+      'agent-sandbox-mcp: create_child_issue needs a parentId (none provided and PAPERCLIP_TASK_ID is unset).',
+    );
+  }
+  if (!input.assigneeAgentId?.trim()) {
+    throw new Error('agent-sandbox-mcp: create_child_issue requires assigneeAgentId.');
+  }
+  const payload: Record<string, unknown> = {
+    title: input.title,
+    description: input.description ?? '',
+    parentId,
+    assigneeAgentId: input.assigneeAgentId,
+    blockParentUntilDone: input.blockParentUntilDone ?? true,
+  };
+  if (input.acceptanceCriteria && input.acceptanceCriteria.length > 0) {
+    payload.acceptanceCriteria = input.acceptanceCriteria;
+  }
+  const url = `${cfg.apiUrl}/api/companies/${cfg.runContext.companyId}/issues`;
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${cfg.apiKey}`,
+      'X-Paperclip-Run-Id': cfg.runContext.runId,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `agent-sandbox-mcp: create_child_issue → HTTP ${res.status}: ${raw.slice(0, 600)}`,
+    );
+  }
+  const j = JSON.parse(raw) as { id?: string; identifier?: string; status?: string };
+  if (!j.id) throw new Error(`agent-sandbox-mcp: create_child_issue → no issue id in response.`);
+  return { id: j.id, identifier: j.identifier, status: j.status };
+}
+
+export interface IssueView {
+  id: string;
+  identifier?: string;
+  title?: string;
+  status?: string;
+  assigneeAgentId?: string | null;
+  /** Most recent comments (the agent's reports), newest last, bodies truncated. */
+  comments: Array<{ body: string }>;
+}
+
+/**
+ * Read a child issue's current state + its latest report comments, so the MO can
+ * review the Engineer's result for a step. Read-only.
+ */
+export async function getIssue(
+  cfg: ProxyConfig,
+  issueId: string,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<IssueView> {
+  const id = issueId.trim();
+  if (!id) throw new Error('agent-sandbox-mcp: get_issue requires an issueId.');
+  const headers = { Authorization: `Bearer ${cfg.apiKey}` };
+
+  const ires = await fetchImpl(`${cfg.apiUrl}/api/issues/${id}`, { method: 'GET', headers });
+  const iraw = await ires.text();
+  if (!ires.ok) {
+    throw new Error(`agent-sandbox-mcp: get_issue → HTTP ${ires.status}: ${iraw.slice(0, 400)}`);
+  }
+  const issue = JSON.parse(iraw) as {
+    id: string;
+    identifier?: string;
+    title?: string;
+    status?: string;
+    assigneeAgentId?: string | null;
+  };
+
+  let comments: Array<{ body: string }> = [];
+  try {
+    const cres = await fetchImpl(`${cfg.apiUrl}/api/issues/${id}/comments`, {
+      method: 'GET',
+      headers,
+    });
+    if (cres.ok) {
+      const carr = JSON.parse(await cres.text());
+      const list = Array.isArray(carr) ? carr : (carr.comments ?? carr.data ?? []);
+      comments = (list as Array<{ body?: string; message?: string; content?: string }>)
+        .slice(-5)
+        .map((c) => ({ body: String(c.body ?? c.message ?? c.content ?? '').slice(0, 4000) }));
+    }
+  } catch {
+    /* comments are best-effort */
+  }
+
+  return {
+    id: issue.id,
+    identifier: issue.identifier,
+    title: issue.title,
+    status: issue.status,
+    assigneeAgentId: issue.assigneeAgentId ?? null,
+    comments,
+  };
+}

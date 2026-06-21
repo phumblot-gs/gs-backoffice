@@ -8,6 +8,8 @@ import {
   githubToken,
   openPr,
   getDiff,
+  createChildIssue,
+  getIssue,
   __resetProjectCache,
   ProxyConfigError,
   SANDBOX_PLUGIN_ID,
@@ -340,5 +342,123 @@ describe('getDiff', () => {
     );
     expect(out).toContain('truncated at 50 bytes');
     expect(out.length).toBeLessThan(big.length + 100);
+  });
+});
+
+const GOV_CFG: ProxyConfig = {
+  apiUrl: 'https://host',
+  apiKey: 'k',
+  runContext: { agentId: 'a', runId: 'run-9', companyId: 'co-1', projectId: 'p' },
+  taskIssueId: 'parent-issue',
+};
+
+describe('createChildIssue', () => {
+  it('POSTs a child under the current issue with assignee + criteria + run header', async () => {
+    const cap: { url?: string; init?: RequestInit } = {};
+    const f = fakeFetch(201, { id: 'child-1', identifier: 'GRA-50', status: 'backlog' }, cap);
+    const r = await createChildIssue(
+      GOV_CFG,
+      {
+        title: 'Step 1',
+        description: 'do x',
+        assigneeAgentId: 'eng-1',
+        acceptanceCriteria: ['x works'],
+        blockParentUntilDone: true,
+      },
+      f,
+    );
+    expect(cap.url).toBe('https://host/api/companies/co-1/issues');
+    const init = cap.init as RequestInit;
+    expect(init.headers).toMatchObject({ 'X-Paperclip-Run-Id': 'run-9' });
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({
+      parentId: 'parent-issue',
+      assigneeAgentId: 'eng-1',
+      acceptanceCriteria: ['x works'],
+      blockParentUntilDone: true,
+    });
+    expect(r).toEqual({ id: 'child-1', identifier: 'GRA-50', status: 'backlog' });
+  });
+
+  it('defaults blockParentUntilDone to true and omits empty criteria', async () => {
+    const cap: { init?: RequestInit } = {};
+    const f = fakeFetch(201, { id: 'c2' }, cap);
+    await createChildIssue(GOV_CFG, { title: 't', assigneeAgentId: 'eng-1' }, f);
+    const body = JSON.parse((cap.init as RequestInit).body as string);
+    expect(body.blockParentUntilDone).toBe(true);
+    expect('acceptanceCriteria' in body).toBe(false);
+  });
+
+  it('requires a parent and an assignee', async () => {
+    const f = fakeFetch(201, { id: 'x' });
+    await expect(
+      createChildIssue(
+        { ...GOV_CFG, taskIssueId: undefined },
+        { title: 't', assigneeAgentId: 'e' },
+        f,
+      ),
+    ).rejects.toThrow(/needs a parentId/);
+    await expect(createChildIssue(GOV_CFG, { title: 't', assigneeAgentId: '' }, f)).rejects.toThrow(
+      /requires assigneeAgentId/,
+    );
+  });
+
+  it('surfaces an HTTP error', async () => {
+    const f = fakeFetch(422, 'bad parent');
+    await expect(
+      createChildIssue(GOV_CFG, { title: 't', assigneeAgentId: 'e' }, f),
+    ).rejects.toThrow(/create_child_issue → HTTP 422.*bad parent/);
+  });
+});
+
+describe('getIssue', () => {
+  it('returns issue core + latest comments', async () => {
+    let n = 0;
+    const f = (async (url: string) => {
+      n += 1;
+      if (url.endsWith('/comments')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify([{ body: 'first' }, { body: 'Engineer: done, PR #9' }]),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: 'child-1',
+            identifier: 'GRA-50',
+            title: 'Step 1',
+            status: 'done',
+            assigneeAgentId: 'eng-1',
+          }),
+      };
+    }) as never;
+    const v = await getIssue(GOV_CFG, 'child-1', f);
+    expect(n).toBe(2);
+    expect(v.status).toBe('done');
+    expect(v.identifier).toBe('GRA-50');
+    expect(v.comments.map((c) => c.body)).toEqual(['first', 'Engineer: done, PR #9']);
+  });
+
+  it('still returns the issue if comments fetch fails', async () => {
+    const f = (async (url: string) => {
+      if (url.endsWith('/comments')) return { ok: false, status: 500, text: async () => 'err' };
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ id: 'i', status: 'in_progress' }),
+      };
+    }) as never;
+    const v = await getIssue(GOV_CFG, 'i', f);
+    expect(v.status).toBe('in_progress');
+    expect(v.comments).toEqual([]);
+  });
+
+  it('surfaces an HTTP error on the issue fetch', async () => {
+    const f = fakeFetch(404, 'not found');
+    await expect(getIssue(GOV_CFG, 'missing', f)).rejects.toThrow(/get_issue → HTTP 404/);
   });
 });
