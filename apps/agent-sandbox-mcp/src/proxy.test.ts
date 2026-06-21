@@ -3,6 +3,7 @@ import {
   readProxyConfig,
   resolveProjectId,
   executeSandboxTool,
+  reportProgress,
   __resetProjectCache,
   ProxyConfigError,
   SANDBOX_PLUGIN_ID,
@@ -192,5 +193,58 @@ describe('executeSandboxTool', () => {
     const r = await executeSandboxTool(CFG, 'sandbox_release', { sandboxKey: 'k' }, f);
     expect(r.content).toBe('sandbox_release completed.');
     expect(r.data).toEqual({ released: true });
+  });
+});
+
+describe('reportProgress', () => {
+  const CFG_TASK: ProxyConfig = {
+    apiUrl: 'https://host',
+    apiKey: 'k',
+    runContext: { agentId: 'a', runId: 'run-7', companyId: 'c', projectId: 'p' },
+    taskIssueId: 'issue-default',
+  };
+
+  it('PATCHes the default issue with status+comment and the run-id header', async () => {
+    const cap: { url?: string; init?: RequestInit } = {};
+    const f = fakeFetch(200, { status: 'done', identifier: 'GRA-42' }, cap);
+    const r = await reportProgress(CFG_TASK, { status: 'done', comment: 'all good' }, f);
+
+    expect(cap.url).toBe('https://host/api/issues/issue-default');
+    const init = cap.init as RequestInit;
+    expect(init.method).toBe('PATCH');
+    expect(init.headers).toMatchObject({
+      'X-Paperclip-Run-Id': 'run-7',
+      Authorization: 'Bearer k',
+    });
+    expect(JSON.parse(init.body as string)).toEqual({ status: 'done', comment: 'all good' });
+    expect(r).toEqual({ status: 'done', identifier: 'GRA-42' });
+  });
+
+  it('honors an explicit issueId override', async () => {
+    const cap: { url?: string } = {};
+    const f = fakeFetch(200, { status: 'blocked' }, cap);
+    await reportProgress(CFG_TASK, { issueId: 'other', comment: 'x' }, f);
+    expect(cap.url).toBe('https://host/api/issues/other');
+  });
+
+  it('requires an issue id', async () => {
+    const f = fakeFetch(200, {});
+    await expect(
+      reportProgress({ ...CFG_TASK, taskIssueId: undefined }, { comment: 'x' }, f),
+    ).rejects.toThrow(/needs an issueId/);
+  });
+
+  it('requires status or comment', async () => {
+    const f = fakeFetch(200, {});
+    await expect(reportProgress(CFG_TASK, {}, f)).rejects.toThrow(
+      /at least one of status or comment/,
+    );
+  });
+
+  it('surfaces an HTTP error', async () => {
+    const f = fakeFetch(422, 'bad status transition');
+    await expect(reportProgress(CFG_TASK, { status: 'done' }, f)).rejects.toThrow(
+      /report_progress → HTTP 422.*bad status/,
+    );
   });
 });

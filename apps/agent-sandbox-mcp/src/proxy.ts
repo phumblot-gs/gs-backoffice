@@ -34,6 +34,8 @@ export interface ProxyConfig {
   apiUrl: string;
   apiKey: string;
   runContext: RunContext;
+  /** The issue this run is working on (PAPERCLIP_TASK_ID); default target for report_progress. */
+  taskIssueId?: string;
 }
 
 export class ProxyConfigError extends Error {}
@@ -88,6 +90,7 @@ export function readProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConf
     apiUrl,
     apiKey,
     runContext: { agentId, runId, companyId, projectId },
+    taskIssueId: get('PAPERCLIP_TASK_ID') || undefined,
   };
 }
 
@@ -225,4 +228,80 @@ export async function executeSandboxTool(
     content: typeof result?.content === 'string' ? result.content : `${toolName} completed.`,
     data: result?.data ?? null,
   };
+}
+
+/** Statuses an agent may move its own issue to via report_progress. */
+export const REPORT_STATUSES = [
+  'in_progress',
+  'in_review',
+  'blocked',
+  'done',
+  'cancelled',
+  'todo',
+] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+export interface ReportInput {
+  /** Defaults to the run's current issue (PAPERCLIP_TASK_ID). */
+  issueId?: string;
+  status?: ReportStatus;
+  comment?: string;
+}
+
+/**
+ * Update the run's own issue (status and/or comment) via `PATCH /api/issues/:id`,
+ * authenticated as the run with the `X-Paperclip-Run-Id` header — the same path the
+ * built-in agent skill drives with curl, but as a native tool so the agent needs no
+ * shell access. Over loopback (set in cfg.apiUrl).
+ */
+export async function reportProgress(
+  cfg: ProxyConfig,
+  input: ReportInput,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<{ status: string; identifier?: string }> {
+  const issueId = (input.issueId || cfg.taskIssueId || '').trim();
+  if (!issueId) {
+    throw new Error(
+      'agent-sandbox-mcp: report_progress needs an issueId (none provided and PAPERCLIP_TASK_ID is unset).',
+    );
+  }
+  if (!input.status && !input.comment) {
+    throw new Error(
+      'agent-sandbox-mcp: report_progress requires at least one of status or comment.',
+    );
+  }
+  const payload: Record<string, unknown> = {};
+  if (input.status) payload.status = input.status;
+  if (input.comment) payload.comment = input.comment;
+
+  const url = `${cfg.apiUrl}/api/issues/${issueId}`;
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        'X-Paperclip-Run-Id': cfg.runContext.runId,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    throw new Error(
+      `agent-sandbox-mcp: report_progress request to ${url} failed: ${(err as Error).message}`,
+    );
+  }
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `agent-sandbox-mcp: report_progress → HTTP ${res.status}: ${raw.slice(0, 600)}`,
+    );
+  }
+  let parsed: { status?: string; identifier?: string } = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    /* the route returns the updated issue; a non-JSON body is non-fatal */
+  }
+  return { status: parsed.status ?? 'updated', identifier: parsed.identifier };
 }
