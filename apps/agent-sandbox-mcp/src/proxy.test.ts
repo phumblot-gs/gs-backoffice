@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   readProxyConfig,
+  resolveProjectId,
   executeSandboxTool,
+  __resetProjectCache,
   ProxyConfigError,
   SANDBOX_PLUGIN_ID,
   type ProxyConfig,
@@ -14,6 +16,8 @@ const FULL_ENV = {
   PAPERCLIP_RUN_ID: 'run-1',
   PAPERCLIP_COMPANY_ID: 'co-1',
 } as NodeJS.ProcessEnv;
+
+beforeEach(() => __resetProjectCache());
 
 describe('readProxyConfig', () => {
   it('reads run context and strips a trailing slash from the API url', () => {
@@ -33,7 +37,11 @@ describe('readProxyConfig', () => {
     expect(cfg.runContext.projectId).toBe('proj-9');
   });
 
-  it('throws listing every missing required var', () => {
+  it('does not require projectId (resolved separately)', () => {
+    expect(() => readProxyConfig(FULL_ENV)).not.toThrow();
+  });
+
+  it('throws listing every missing required var (projectId excepted)', () => {
     expect(() => readProxyConfig({ PAPERCLIP_API_URL: 'x' } as NodeJS.ProcessEnv)).toThrow(
       ProxyConfigError,
     );
@@ -45,12 +53,13 @@ describe('readProxyConfig', () => {
       expect(m).toContain('PAPERCLIP_AGENT_ID');
       expect(m).toContain('PAPERCLIP_RUN_ID');
       expect(m).toContain('PAPERCLIP_COMPANY_ID');
-      expect(m).not.toContain('PAPERCLIP_API_URL'); // it was present
+      expect(m).not.toContain('PAPERCLIP_API_URL'); // present
+      expect(m).not.toContain('PAPERCLIP_PROJECT_ID'); // not required
     }
   });
 });
 
-const CFG: ProxyConfig = {
+const BASE_CFG: ProxyConfig = {
   apiUrl: 'https://host',
   apiKey: 'k',
   runContext: { agentId: 'a', runId: 'r', companyId: 'c' },
@@ -71,8 +80,55 @@ function fakeFetch(
   };
 }
 
+describe('resolveProjectId', () => {
+  it('uses the env-provided projectId without any fetch', async () => {
+    let called = false;
+    const f = (async () => {
+      called = true;
+      return { ok: true, status: 200, text: async () => '[]' };
+    }) as never;
+    const id = await resolveProjectId(
+      { ...BASE_CFG, runContext: { ...BASE_CFG.runContext, projectId: 'p-env' } },
+      f,
+    );
+    expect(id).toBe('p-env');
+    expect(called).toBe(false);
+  });
+
+  it('fetches the first authorized company project and caches it', async () => {
+    const cap: { url?: string } = {};
+    const f = fakeFetch(200, { projects: [{ id: 'p-first', name: 'A' }, { id: 'p-2' }] }, cap);
+    const id = await resolveProjectId(BASE_CFG, f);
+    expect(id).toBe('p-first');
+    expect(cap.url).toBe('https://host/api/companies/c/projects');
+    // second call is served from cache (a throwing fetch must not be hit)
+    const id2 = await resolveProjectId(BASE_CFG, (async () => {
+      throw new Error('should not fetch again');
+    }) as never);
+    expect(id2).toBe('p-first');
+  });
+
+  it('throws a clear error when the actor has no authorized projects', async () => {
+    const f = fakeFetch(200, { projects: [] });
+    await expect(resolveProjectId(BASE_CFG, f)).rejects.toThrow(/no authorized projects/);
+  });
+
+  it('surfaces an HTTP error from the projects listing', async () => {
+    const f = fakeFetch(403, 'forbidden');
+    await expect(resolveProjectId(BASE_CFG, f)).rejects.toThrow(
+      /cannot resolve projectId.*HTTP 403/,
+    );
+  });
+});
+
+const CFG: ProxyConfig = {
+  apiUrl: 'https://host',
+  apiKey: 'k',
+  runContext: { agentId: 'a', runId: 'r', companyId: 'c', projectId: 'p' },
+};
+
 describe('executeSandboxTool', () => {
-  it('posts the namespaced tool + runContext and returns content+data', async () => {
+  it('posts the namespaced tool + full runContext (incl. projectId) and returns content+data', async () => {
     const cap: { url?: string; init?: RequestInit } = {};
     const f = fakeFetch(
       200,
@@ -94,7 +150,7 @@ describe('executeSandboxTool', () => {
     expect(cap.url).toBe('https://host/api/plugins/tools/execute');
     const body = JSON.parse((cap.init as RequestInit).body as string);
     expect(body.tool).toBe(`${SANDBOX_PLUGIN_ID}:sandbox_run`);
-    expect(body.runContext).toEqual({ agentId: 'a', runId: 'r', companyId: 'c' });
+    expect(body.runContext).toEqual({ agentId: 'a', runId: 'r', companyId: 'c', projectId: 'p' });
     expect(body.parameters.command).toBe('node -v');
     expect((cap.init as RequestInit).headers).toMatchObject({ Authorization: 'Bearer k' });
 
