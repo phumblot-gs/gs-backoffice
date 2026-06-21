@@ -61,6 +61,8 @@ const REPLACEMENT = `const ADAPTER_ENV_PASSTHROUGH = [
     // GS sandbox tools: forward the Fly Sprites + GitHub tokens to the worker.
     "SPRITES_TOKEN",
     "SANDBOX_GITHUB_TOKEN",
+    "SANDBOX_GITHUB_READ_TOKEN",
+    "SANDBOX_GITHUB_PUSH_TOKEN",
 ];`;
 
 const file = findPluginLoaderJs();
