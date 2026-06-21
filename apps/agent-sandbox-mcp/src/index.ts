@@ -16,6 +16,8 @@ import {
   reportProgress,
   openPr,
   getDiff,
+  createChildIssue,
+  getIssue,
   REPORT_STATUSES,
   type SandboxToolName,
 } from './proxy.js';
@@ -166,6 +168,65 @@ export function createServer(): McpServer {
       try {
         const r = await openPr(args);
         return textResult(`Opened PR #${r.number}: ${r.url}`);
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+    },
+  );
+
+  server.tool(
+    'create_child_issue',
+    'Decompose your work: create a child issue (one step) under YOUR current issue and assign it to an agent (e.g. the Engineer). Give it concrete, verifiable acceptanceCriteria. Use this to drive the engineer loop step by step — spawn a step, get woken when it completes, review it, then spawn the next. By default the child blocks your issue until done.',
+    {
+      title: z.string().describe('Short title of the step.'),
+      description: z.string().optional().describe('What the assignee must do for this step.'),
+      assigneeAgentId: z.string().describe('Agent id to assign the step to (e.g. the Engineer).'),
+      acceptanceCriteria: z
+        .array(z.string())
+        .optional()
+        .describe('Concrete, verifiable criteria for THIS step (≤20).'),
+      blockParentUntilDone: z
+        .boolean()
+        .optional()
+        .describe('Keep your issue blocked until this step is done (default true).'),
+    },
+    async (args) => {
+      let cfg;
+      try {
+        cfg = readProxyConfig();
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+      try {
+        const r = await createChildIssue(cfg, args);
+        return textResult(
+          `Created child issue ${r.identifier ?? r.id} (status: ${r.status ?? '?'}).`,
+        );
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+    },
+  );
+
+  server.tool(
+    'get_issue',
+    "Read an issue's current status and its latest report comments — use it to review a child step's result (the Engineer's report) before deciding the next step.",
+    {
+      issueId: z.string().describe('The issue to read (e.g. a child step you created).'),
+    },
+    async (args) => {
+      let cfg;
+      try {
+        cfg = readProxyConfig();
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+      try {
+        const v = await getIssue(cfg, args.issueId);
+        const comments = v.comments.map((c) => `- ${c.body}`).join('\n\n');
+        return textResult(
+          `${v.identifier ?? v.id} "${v.title ?? ''}" — status: ${v.status ?? '?'}, assignee: ${v.assigneeAgentId ?? 'none'}\n\nLatest comments:\n${comments || '(none)'}`,
+        );
       } catch (err) {
         return textResult((err as Error).message, true);
       }

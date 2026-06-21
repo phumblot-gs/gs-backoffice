@@ -34,3 +34,19 @@ export {
   type PerCompanyRBACConfig,
   type ResolvedAccess,
 } from './rbac.js';
+export {
+  CRITICALITY_LEVELS,
+  CriticalityLevelSchema,
+  ComplianceChecksSchema,
+  AuditRequirementSchema,
+  ComplianceStandardSchema,
+  ComplianceRegistrySchema,
+  parseComplianceRegistry,
+  standardFor,
+  requiredChecks,
+  type CriticalityLevel,
+  type ComplianceChecks,
+  type AuditRequirement,
+  type ComplianceStandard,
+  type ComplianceRegistry,
+} from './compliance.js';
