@@ -14,6 +14,8 @@ import {
   readProxyConfig,
   executeSandboxTool,
   reportProgress,
+  openPr,
+  getDiff,
   REPORT_STATUSES,
   type SandboxToolName,
 } from './proxy.js';
@@ -123,6 +125,47 @@ export function createServer(): McpServer {
         return textResult(
           `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}).`.trim(),
         );
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+    },
+  );
+
+  server.tool(
+    'get_diff',
+    'Review code changes: return the unified diff between two git refs of a repo (e.g. base "main" vs a branch a sandbox_code_task pushed). Read-only. Use this to inspect what was changed before opening or approving a PR.',
+    {
+      repoUrl: z.string().describe('Git URL of the repo (e.g. https://github.com/org/repo.git).'),
+      base: z.string().describe('Base ref to compare from (e.g. "main").'),
+      head: z.string().describe('Head ref to compare to (e.g. the branch that was pushed).'),
+      maxBytes: z
+        .number()
+        .optional()
+        .describe('Truncate the diff to this many bytes (default 50000).'),
+    },
+    async (args) => {
+      try {
+        return textResult(await getDiff(args));
+      } catch (err) {
+        return textResult((err as Error).message, true);
+      }
+    },
+  );
+
+  server.tool(
+    'open_pr',
+    'Open a GitHub pull request for a branch that a sandbox_code_task pushed. The durable result of the engineer loop. Merging stays a human decision — this only opens the PR. Returns the PR number and URL.',
+    {
+      repoUrl: z.string().describe('Git URL of the repo (e.g. https://github.com/org/repo.git).'),
+      head: z.string().describe('The branch to open the PR from (the pushed branch).'),
+      base: z.string().optional().describe('The branch to merge into (default "main").'),
+      title: z.string().describe('PR title.'),
+      body: z.string().optional().describe('PR description (markdown).'),
+    },
+    async (args) => {
+      try {
+        const r = await openPr(args);
+        return textResult(`Opened PR #${r.number}: ${r.url}`);
       } catch (err) {
         return textResult((err as Error).message, true);
       }
