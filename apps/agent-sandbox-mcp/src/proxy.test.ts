@@ -10,7 +10,6 @@ import {
 } from './proxy.js';
 
 const FULL_ENV = {
-  PAPERCLIP_API_URL: 'https://backoffice-staging.grand-shooting.com/',
   PAPERCLIP_API_KEY: 'pc_key_123',
   PAPERCLIP_AGENT_ID: 'agent-1',
   PAPERCLIP_RUN_ID: 'run-1',
@@ -20,9 +19,12 @@ const FULL_ENV = {
 beforeEach(() => __resetProjectCache());
 
 describe('readProxyConfig', () => {
-  it('reads run context and strips a trailing slash from the API url', () => {
-    const cfg = readProxyConfig(FULL_ENV);
-    expect(cfg.apiUrl).toBe('https://backoffice-staging.grand-shooting.com');
+  it('uses loopback (default port 3100) to bypass the ALB, not the public URL', () => {
+    const cfg = readProxyConfig({
+      ...FULL_ENV,
+      PAPERCLIP_API_URL: 'https://backoffice-staging.grand-shooting.com',
+    } as NodeJS.ProcessEnv);
+    expect(cfg.apiUrl).toBe('http://127.0.0.1:3100');
     expect(cfg.apiKey).toBe('pc_key_123');
     expect(cfg.runContext).toEqual({
       agentId: 'agent-1',
@@ -30,6 +32,19 @@ describe('readProxyConfig', () => {
       companyId: 'co-1',
       projectId: undefined,
     });
+  });
+
+  it('honors PORT for the loopback url', () => {
+    const cfg = readProxyConfig({ ...FULL_ENV, PORT: '4000' } as NodeJS.ProcessEnv);
+    expect(cfg.apiUrl).toBe('http://127.0.0.1:4000');
+  });
+
+  it('honors an explicit PAPERCLIP_SANDBOX_API_URL override (trailing slash stripped)', () => {
+    const cfg = readProxyConfig({
+      ...FULL_ENV,
+      PAPERCLIP_SANDBOX_API_URL: 'http://paperclip.internal:9/',
+    } as NodeJS.ProcessEnv);
+    expect(cfg.apiUrl).toBe('http://paperclip.internal:9');
   });
 
   it('forwards projectId when PAPERCLIP_PROJECT_ID is set', () => {
@@ -41,20 +56,20 @@ describe('readProxyConfig', () => {
     expect(() => readProxyConfig(FULL_ENV)).not.toThrow();
   });
 
-  it('throws listing every missing required var (projectId excepted)', () => {
-    expect(() => readProxyConfig({ PAPERCLIP_API_URL: 'x' } as NodeJS.ProcessEnv)).toThrow(
+  it('throws listing every missing required var (projectId + apiUrl excepted)', () => {
+    expect(() => readProxyConfig({ PAPERCLIP_API_KEY: 'x' } as NodeJS.ProcessEnv)).toThrow(
       ProxyConfigError,
     );
     try {
-      readProxyConfig({ PAPERCLIP_API_URL: 'x' } as NodeJS.ProcessEnv);
+      readProxyConfig({ PAPERCLIP_API_KEY: 'x' } as NodeJS.ProcessEnv);
     } catch (e) {
       const m = (e as Error).message;
-      expect(m).toContain('PAPERCLIP_API_KEY');
       expect(m).toContain('PAPERCLIP_AGENT_ID');
       expect(m).toContain('PAPERCLIP_RUN_ID');
       expect(m).toContain('PAPERCLIP_COMPANY_ID');
-      expect(m).not.toContain('PAPERCLIP_API_URL'); // present
-      expect(m).not.toContain('PAPERCLIP_PROJECT_ID'); // not required
+      expect(m).not.toContain('PAPERCLIP_API_KEY'); // present
+      expect(m).not.toContain('PAPERCLIP_PROJECT_ID'); // resolved separately
+      expect(m).not.toContain('PAPERCLIP_API_URL'); // loopback, not required
     }
   });
 });
