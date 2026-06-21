@@ -1,4 +1,4 @@
-import type { PluginContext, ToolResult } from '@paperclipai/plugin-sdk';
+import type { PluginContext, ToolResult, ScopeKey } from '@paperclipai/plugin-sdk';
 import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
@@ -148,6 +148,68 @@ async function ensureSprite(client: SpritesClient, name: string, region: string)
   }
 }
 
+// --- Idle tracking + reaper (Sprites expose no reliable last-activity, so we
+// track last-use ourselves in instance-scoped plugin state, keyed by sprite name). ---
+const lastUsedKey = (name: string): ScopeKey => ({
+  scopeKind: 'instance',
+  namespace: 'sandbox-lastused',
+  stateKey: name,
+});
+
+/** Mark a sandbox as just used (best-effort). */
+async function touchSandbox(ctx: PluginContext, name: string): Promise<void> {
+  try {
+    await ctx.state.set(lastUsedKey(name), { lastUsedAt: Date.now() });
+  } catch {
+    /* best-effort: tracking failure must not fail the tool call */
+  }
+}
+
+/** Forget a released sandbox's usage record (best-effort). */
+async function forgetSandbox(ctx: PluginContext, name: string): Promise<void> {
+  try {
+    await ctx.state.delete(lastUsedKey(name));
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Delete sandbox Sprites idle longer than `ttlDays` (tracked via plugin state).
+ * Untracked Sprites (no state row) are left alone to avoid racing a fresh create.
+ * Backstop to `sandbox_release`; bounds cold-storage cost. Exported for testing.
+ */
+export async function reapIdleSandboxes(
+  ctx: PluginContext,
+  opts: {
+    ttlDays: number;
+    spritesToken: string;
+    now: number;
+    /** Injectable for tests; defaults to a real Fly client. */
+    client?: Pick<SpritesClient, 'listAllSprites' | 'deleteSprite'>;
+  },
+): Promise<{ checked: number; deleted: string[] }> {
+  const client = opts.client ?? flyClient(opts.spritesToken);
+  const ttlMs = opts.ttlDays * 24 * 60 * 60 * 1000;
+  const sprites = await client.listAllSprites('sandbox-').catch(() => []);
+  const deleted: string[] = [];
+  for (const sprite of sprites) {
+    const name = sprite.name;
+    if (!name || !name.startsWith('sandbox-')) continue;
+    const state = (await ctx.state.get(lastUsedKey(name)).catch(() => null)) as {
+      lastUsedAt?: number;
+    } | null;
+    const lastUsedAt = state && typeof state.lastUsedAt === 'number' ? state.lastUsedAt : null;
+    if (lastUsedAt === null) continue; // untracked → leave (avoid racing a create)
+    if (opts.now - lastUsedAt > ttlMs) {
+      await client.deleteSprite(name).catch(() => undefined);
+      await ctx.state.delete(lastUsedKey(name)).catch(() => undefined);
+      deleted.push(name);
+    }
+  }
+  return { checked: sprites.length, deleted };
+}
+
 export function registerSandboxTools(ctx: PluginContext): void {
   ctx.tools.register(
     'sandbox_run',
@@ -174,18 +236,18 @@ export function registerSandboxTools(ctx: PluginContext): void {
             'Fly Sprites token unavailable in the worker env (expected SPRITES_TOKEN; ensure the plugin-loader env passthrough patch is applied and the secret is set).',
         };
       }
-      // Single GitHub token for now (read + push); the read/push split is a future
-      // hardening (separate tokens / GitHub App).
-      const githubToken = envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+      // Verification uses a READ-only token when configured, else the push token,
+      // else the combined token (least privilege per role; single-token fallback).
+      const githubToken =
+        (input.credMode === 'push'
+          ? envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN')
+          : envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN')) ??
+        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
 
       const client = flyClient(spritesToken);
       const name = spriteNameForKey(input.sandboxKey);
-      let sprite;
-      try {
-        sprite = await client.getSprite(name);
-      } catch {
-        sprite = await client.createSprite(name, { region });
-      }
+      const sprite = await ensureSprite(client, name, region);
+      await touchSandbox(ctx, name);
 
       try {
         const r = await sandboxRun(sprite, {
@@ -266,11 +328,14 @@ export function registerSandboxTools(ctx: PluginContext): void {
       const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
       if (!spritesToken)
         return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
-      const githubToken = envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+      // code_task needs a PUSH-capable token (push env, else combined).
+      const githubToken =
+        envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN') ??
+        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
       if (!githubToken)
         return {
           error:
-            'GitHub token unavailable in the worker env (SANDBOX_GITHUB_TOKEN) — required to push.',
+            'Push-capable GitHub token unavailable in the worker env (SANDBOX_GITHUB_PUSH_TOKEN or SANDBOX_GITHUB_TOKEN) — required to push.',
         };
       const anthropicKey = envSecret(cfg, 'anthropicKeyEnv', 'ANTHROPIC_API_KEY');
       if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
@@ -279,6 +344,7 @@ export function registerSandboxTools(ctx: PluginContext): void {
       const name = spriteNameForKey(input.sandboxKey);
       try {
         const sprite = await ensureSprite(client, name, region);
+        await touchSandbox(ctx, name);
         const r = await sandboxCodeTask(sprite, {
           repoUrl: input.repoUrl,
           baseBranch: input.baseBranch,
@@ -332,6 +398,7 @@ export function registerSandboxTools(ctx: PluginContext): void {
       const name = spriteNameForKey(key);
       try {
         await flyClient(spritesToken).deleteSprite(name);
+        await forgetSandbox(ctx, name);
         return {
           content: `Released sandbox "${name}".`,
           data: { sandboxKey: key, spriteName: name, released: true },
@@ -343,4 +410,18 @@ export function registerSandboxTools(ctx: PluginContext): void {
       }
     },
   );
+
+  // Idle reaper: backstop to sandbox_release, bounds cold-storage cost.
+  ctx.jobs.register('sandbox-reaper', async () => {
+    const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+    const ttlDays =
+      typeof cfg.reaperTtlDays === 'number' && cfg.reaperTtlDays > 0 ? cfg.reaperTtlDays : 7;
+    const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+    if (!spritesToken) {
+      ctx.logger.warn('sandbox-reaper: SPRITES_TOKEN unavailable, skipping');
+      return;
+    }
+    const res = await reapIdleSandboxes(ctx, { ttlDays, spritesToken, now: Date.now() });
+    ctx.logger.info('sandbox-reaper: reclaimed idle sandboxes', { ...res, ttlDays });
+  });
 }

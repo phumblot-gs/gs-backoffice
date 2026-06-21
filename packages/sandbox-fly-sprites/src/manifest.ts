@@ -19,7 +19,22 @@ const manifest: PaperclipPluginManifestV1 = {
   categories: ['automation'],
   // `environment.drivers.register` is also what gates the worker env passthrough
   // (SPRITES_TOKEN / SANDBOX_GITHUB_TOKEN / ANTHROPIC_API_KEY) the sandbox tools rely on.
-  capabilities: ['environment.drivers.register', 'agent.tools.register'],
+  capabilities: [
+    'environment.drivers.register',
+    'agent.tools.register',
+    'jobs.schedule',
+    'plugin.state.read',
+    'plugin.state.write',
+  ],
+  // Idle reaper: hourly job that deletes sandbox Sprites idle beyond the TTL.
+  jobs: [
+    {
+      jobKey: 'sandbox-reaper',
+      displayName: 'Sandbox idle reaper',
+      description: 'Delete sandbox Sprites idle beyond the configured TTL (default 7 days).',
+      schedule: '0 * * * *',
+    },
+  ],
   entrypoints: {
     worker: './dist/worker.js',
   },
@@ -36,8 +51,27 @@ const manifest: PaperclipPluginManifestV1 = {
       },
       githubTokenEnv: {
         type: 'string',
-        description: 'Env var name holding the GitHub token (default SANDBOX_GITHUB_TOKEN).',
+        description:
+          'Env var name for the combined GitHub token, used when no read/push split is set (default SANDBOX_GITHUB_TOKEN).',
         default: 'SANDBOX_GITHUB_TOKEN',
+      },
+      githubReadTokenEnv: {
+        type: 'string',
+        description:
+          'Env var name for a read-only GitHub token (verification / sandbox_run). Falls back to the combined token.',
+        default: 'SANDBOX_GITHUB_READ_TOKEN',
+      },
+      githubPushTokenEnv: {
+        type: 'string',
+        description:
+          'Env var name for a push-capable GitHub token (sandbox_code_task). Falls back to the combined token.',
+        default: 'SANDBOX_GITHUB_PUSH_TOKEN',
+      },
+      reaperTtlDays: {
+        type: 'number',
+        description:
+          'Idle-reaper TTL in days: sandboxes unused longer than this are deleted (default 7).',
+        default: 7,
       },
       region: {
         type: 'string',

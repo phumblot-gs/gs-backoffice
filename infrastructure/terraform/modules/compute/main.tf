@@ -169,10 +169,21 @@ resource "aws_ecs_task_definition" "paperclip" {
         valueFrom = "${var.app_secrets_arn}:SPRITES_TOKEN::"
       },
       {
-        # GitHub token for the sandbox tools (clone/push from inside a Sprite).
-        # Forwarded to the plugin worker via the ADAPTER_ENV_PASSTHROUGH patch.
+        # GitHub token for the sandbox tools (clone/push from inside a Sprite),
+        # used when no read/push split is configured. Forwarded to the plugin
+        # worker via the ADAPTER_ENV_PASSTHROUGH patch.
         name      = "SANDBOX_GITHUB_TOKEN"
         valueFrom = "${var.app_secrets_arn}:SANDBOX_GITHUB_TOKEN::"
+      },
+      {
+        # Read-only GitHub token for verification (sandbox_run). Least privilege.
+        name      = "SANDBOX_GITHUB_READ_TOKEN"
+        valueFrom = "${var.app_secrets_arn}:SANDBOX_GITHUB_READ_TOKEN::"
+      },
+      {
+        # Push-capable GitHub token for sandbox_code_task.
+        name      = "SANDBOX_GITHUB_PUSH_TOKEN"
+        valueFrom = "${var.app_secrets_arn}:SANDBOX_GITHUB_PUSH_TOKEN::"
       },
       {
         name      = "PAPERCLIP_SECRETS_MASTER_KEY"

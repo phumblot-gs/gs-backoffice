@@ -5,7 +5,13 @@ import {
   buildCodeTaskCheckoutScript,
   SANDBOX_WORK_DIR,
 } from './sandbox.js';
-import { spriteNameForKey, parseSandboxRunParams, parseCodeTaskParams } from './tools.js';
+import {
+  spriteNameForKey,
+  parseSandboxRunParams,
+  parseCodeTaskParams,
+  reapIdleSandboxes,
+} from './tools.js';
+import type { PluginContext } from '@paperclipai/plugin-sdk';
 
 describe('buildGitCredentialSetup', () => {
   it('uses a credential helper reading $GH_TOKEN (no token in url/config)', () => {
@@ -133,5 +139,54 @@ describe('parseCodeTaskParams', () => {
     const r = parseCodeTaskParams({ sandboxKey: 'k', repoUrl: 'u', targetBranch: 't' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/task/);
+  });
+});
+
+describe('reapIdleSandboxes', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  function fakeCtx(state: Record<string, unknown>): {
+    ctx: PluginContext;
+    state: Record<string, unknown>;
+  } {
+    const ctx = {
+      state: {
+        get: async (k: { stateKey: string }) => state[k.stateKey] ?? null,
+        set: async (k: { stateKey: string }, v: unknown) => {
+          state[k.stateKey] = v;
+        },
+        delete: async (k: { stateKey: string }) => {
+          delete state[k.stateKey];
+        },
+      },
+    } as unknown as PluginContext;
+    return { ctx, state };
+  }
+
+  it('deletes only sandboxes idle beyond the TTL; leaves fresh + untracked ones', async () => {
+    const now = 100 * DAY;
+    const state: Record<string, unknown> = {
+      'sandbox-old': { lastUsedAt: now - 8 * DAY }, // idle > 7d → delete
+      'sandbox-fresh': { lastUsedAt: now - 1 * DAY }, // recent → keep
+      // 'sandbox-untracked' has no state → keep (avoid racing a create)
+    };
+    const { ctx } = fakeCtx(state);
+    const deletedCalls: string[] = [];
+    const client = {
+      listAllSprites: async () => [
+        { name: 'sandbox-old' },
+        { name: 'sandbox-fresh' },
+        { name: 'sandbox-untracked' },
+      ],
+      deleteSprite: async (n: string) => {
+        deletedCalls.push(n);
+      },
+    } as never;
+
+    const res = await reapIdleSandboxes(ctx, { ttlDays: 7, spritesToken: 'x', now, client });
+    expect(res.checked).toBe(3);
+    expect(res.deleted).toEqual(['sandbox-old']);
+    expect(deletedCalls).toEqual(['sandbox-old']);
+    expect(state['sandbox-old']).toBeUndefined(); // state row cleared
+    expect(state['sandbox-fresh']).toBeDefined();
   });
 });
