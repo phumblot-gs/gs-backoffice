@@ -17,10 +17,81 @@ const manifest: PaperclipPluginManifestV1 = {
     'Provisions Fly Sprites (Firecracker microVMs) as isolated Paperclip execution environments.',
   author: 'GRAFMAKER',
   categories: ['automation'],
-  capabilities: ['environment.drivers.register'],
+  capabilities: ['environment.drivers.register', 'agent.tools.register', 'secrets.read-ref'],
   entrypoints: {
     worker: './dist/worker.js',
   },
+  // Operator config for the sandbox tools (secret-reference names + defaults).
+  instanceConfigSchema: {
+    type: 'object',
+    properties: {
+      spritesTokenRef: {
+        type: 'string',
+        description: 'Secret name resolving to the Fly Sprites API token.',
+        default: 'SPRITES_TOKEN',
+      },
+      githubReadTokenRef: {
+        type: 'string',
+        description: 'Secret name for a read-only GitHub token (clone/fetch in verification runs).',
+      },
+      githubPushTokenRef: {
+        type: 'string',
+        description: 'Secret name for a push-capable GitHub token (used by sandbox_code_task).',
+      },
+      anthropicKeyRef: {
+        type: 'string',
+        description: 'Secret name for the Anthropic API key (used by sandbox_code_task).',
+        default: 'ANTHROPIC_API_KEY',
+      },
+      region: {
+        type: 'string',
+        description: "Fly region for sandbox tool Sprites (e.g. 'cdg').",
+        default: 'cdg',
+      },
+      timeoutMs: {
+        type: 'number',
+        description: 'Default per-command timeout for sandbox tools (ms).',
+        default: 3600000,
+      },
+    },
+  },
+  tools: [
+    {
+      name: 'sandbox_run',
+      displayName: 'Run a command in a sandbox',
+      description:
+        'Run an arbitrary command in an isolated, reusable Fly Sprite microVM with a repo checked out at a given git ref, and return the captured exit code + output. For verification: tests, code scanners, pentest tools, lint, build. Reuses the sandbox keyed by `sandboxKey`; does not push.',
+      parametersSchema: {
+        type: 'object',
+        required: ['sandboxKey', 'repoUrl', 'ref', 'command'],
+        additionalProperties: false,
+        properties: {
+          sandboxKey: {
+            type: 'string',
+            description:
+              'Stable id scoping Sprite reuse, tied to repo + role (e.g. "audit-GRA-12"). Same key reuses the same microVM; distinct keys never share a sandbox.',
+          },
+          repoUrl: { type: 'string', description: 'Git URL to clone (per project).' },
+          ref: {
+            type: 'string',
+            description: 'Branch name or commit SHA to check out before running.',
+          },
+          command: {
+            type: 'string',
+            description:
+              'Command to run in the repo dir (via `sh -c`), e.g. "pnpm test". Does not push.',
+          },
+          credMode: {
+            type: 'string',
+            enum: ['read_only', 'push'],
+            default: 'read_only',
+            description: 'Which GitHub credential to expose to git in the sandbox.',
+          },
+          timeoutMs: { type: 'number', description: 'Hard wall-clock limit for the command (ms).' },
+        },
+      },
+    },
+  ],
   environmentDrivers: [
     {
       driverKey: 'fly-sprites',
