@@ -15,14 +15,29 @@ RUN apt-get update \
 FROM base AS plugin-build
 WORKDIR /repo
 COPY . .
-RUN pnpm install --frozen-lockfile --filter @gs-backoffice/sandbox-fly-sprites... \
-  && pnpm --filter @gs-backoffice/sandbox-fly-sprites build
+RUN pnpm install --frozen-lockfile \
+    --filter @gs-backoffice/sandbox-fly-sprites... \
+    --filter @gs-backoffice/agent-sandbox-mcp... \
+  && pnpm --filter @gs-backoffice/sandbox-fly-sprites build \
+  && pnpm --filter @gs-backoffice/agent-sandbox-mcp build
 # Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
 RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
   && cp -r packages/sandbox-fly-sprites/dist /opt/gs-plugins/plugin-fly-sprites/dist \
   && cp packages/sandbox-fly-sprites/package.json /opt/gs-plugins/plugin-fly-sprites/package.json \
   && cd /opt/gs-plugins/plugin-fly-sprites \
   && npm install --omit=dev --no-package-lock
+# Standalone bundle for the agent-facing sandbox MCP server (stdio). NOT a Paperclip
+# plugin — the agent's `claude` process launches it via --mcp-config; it proxies tool
+# calls to the deployed sandbox plugin's executeTool route. Vendor it + its prod deps.
+RUN mkdir -p /opt/gs-agent-tools/agent-sandbox-mcp \
+  && cp -r apps/agent-sandbox-mcp/dist /opt/gs-agent-tools/agent-sandbox-mcp/dist \
+  && cp apps/agent-sandbox-mcp/package.json /opt/gs-agent-tools/agent-sandbox-mcp/package.json \
+  && cd /opt/gs-agent-tools/agent-sandbox-mcp \
+  && npm install --omit=dev --no-package-lock
+# MCP config that points `claude` at the baked stdio server. Attach to an agent via
+# adapterConfig.extraArgs: ["--mcp-config", "/opt/gs-agent-tools/mcp-config.json"].
+RUN printf '%s\n' '{"mcpServers":{"gs-sandbox":{"command":"node","args":["/opt/gs-agent-tools/agent-sandbox-mcp/dist/index.js"]}}}' \
+  > /opt/gs-agent-tools/mcp-config.json
 
 FROM base AS production
 WORKDIR /app
@@ -43,6 +58,8 @@ RUN mkdir -p /paperclip && chown node:node /paperclip
 # Bake the self-contained plugin at a stable path (outside the instance plugins
 # dir, so Paperclip references it without managing/cleaning it).
 COPY --from=plugin-build --chown=node:node /opt/gs-plugins /opt/gs-plugins
+# Bake the agent-facing sandbox MCP server + its mcp-config at a stable path.
+COPY --from=plugin-build --chown=node:node /opt/gs-agent-tools /opt/gs-agent-tools
 COPY --chown=node:node docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production
