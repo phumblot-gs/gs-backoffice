@@ -1,6 +1,7 @@
 import type { PluginContext, ToolResult } from '@paperclipai/plugin-sdk';
+import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
-import { sandboxRun } from './sandbox.js';
+import { sandboxRun, sandboxCodeTask } from './sandbox.js';
 
 /** Fly Sprite names must be lowercase alphanumeric + hyphens. Derive a stable,
  *  collision-resistant name from the caller's `sandboxKey`. Pure (testable). */
@@ -101,6 +102,52 @@ function envSecret(
   return value && value.trim() ? value : undefined;
 }
 
+interface CodeTaskParams {
+  sandboxKey: string;
+  repoUrl: string;
+  baseBranch: string;
+  targetBranch: string;
+  task: string;
+  model?: string;
+  timeoutMs?: number;
+}
+
+/** Validate + normalize sandbox_code_task params. Pure. */
+export function parseCodeTaskParams(
+  raw: unknown,
+): { ok: true; value: CodeTaskParams } | { ok: false; error: string } {
+  const p = (raw ?? {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof p[k] === 'string' ? (p[k] as string) : '');
+  for (const k of ['sandboxKey', 'repoUrl', 'targetBranch', 'task']) {
+    if (!str(k).trim()) return { ok: false, error: `Missing or empty required parameter: ${k}` };
+  }
+  const timeoutMs =
+    typeof p.timeoutMs === 'number' && Number.isFinite(p.timeoutMs) && p.timeoutMs > 0
+      ? Math.trunc(p.timeoutMs)
+      : undefined;
+  return {
+    ok: true,
+    value: {
+      sandboxKey: str('sandboxKey').trim(),
+      repoUrl: str('repoUrl').trim(),
+      baseBranch: str('baseBranch').trim() || 'main',
+      targetBranch: str('targetBranch').trim(),
+      task: p.task as string,
+      model: str('model').trim() || undefined,
+      timeoutMs,
+    },
+  };
+}
+
+/** Get a handle to the sandbox's Sprite, creating it if absent. */
+async function ensureSprite(client: SpritesClient, name: string, region: string): Promise<Sprite> {
+  try {
+    return await client.getSprite(name);
+  } catch {
+    return await client.createSprite(name, { region });
+  }
+}
+
 export function registerSandboxTools(ctx: PluginContext): void {
   ctx.tools.register(
     'sandbox_run',
@@ -169,6 +216,129 @@ export function registerSandboxTools(ctx: PluginContext): void {
       } catch (error) {
         return {
           error: `sandbox_run failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    },
+  );
+
+  ctx.tools.register(
+    'sandbox_code_task',
+    {
+      displayName: 'Run a coding task with Claude in a sandbox',
+      description:
+        'Run Claude in an isolated, reusable Fly Sprite to perform a coding task on a branch, then commit and push the result to GitHub from inside the sandbox. Reuses the sandbox keyed by `sandboxKey` (re-invoke to iterate on the same branch). Returns the branch, head SHA, and Claude’s summary; review the diff with your GitHub tools.',
+      parametersSchema: {
+        type: 'object',
+        required: ['sandboxKey', 'repoUrl', 'targetBranch', 'task'],
+        additionalProperties: false,
+        properties: {
+          sandboxKey: {
+            type: 'string',
+            description: 'Stable id scoping Sprite reuse (tie to repo + issue, e.g. "eng-GRA-12").',
+          },
+          repoUrl: { type: 'string', description: 'Git URL to clone (per project).' },
+          baseBranch: {
+            type: 'string',
+            description: 'Branch to start from when the target branch is new (default "main").',
+          },
+          targetBranch: { type: 'string', description: 'Branch to commit + push the work to.' },
+          task: {
+            type: 'string',
+            description: 'Instruction for Claude (it edits files; the tool commits + pushes).',
+          },
+          model: { type: 'string', description: 'Optional Claude model for the in-sandbox run.' },
+          timeoutMs: {
+            type: 'number',
+            description: 'Hard wall-clock limit (ms; host caps at 15min).',
+          },
+        },
+      },
+    },
+    async (params): Promise<ToolResult> => {
+      const parsed = parseCodeTaskParams(params);
+      if (!parsed.ok) return { error: parsed.error };
+      const input = parsed.value;
+      const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+      const region =
+        typeof cfg.region === 'string' && cfg.region.trim() ? cfg.region.trim() : 'cdg';
+      const cfgTimeout = typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : undefined;
+
+      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+      if (!spritesToken)
+        return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
+      const githubToken = envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+      if (!githubToken)
+        return {
+          error:
+            'GitHub token unavailable in the worker env (SANDBOX_GITHUB_TOKEN) — required to push.',
+        };
+      const anthropicKey = envSecret(cfg, 'anthropicKeyEnv', 'ANTHROPIC_API_KEY');
+      if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
+
+      const client = flyClient(spritesToken);
+      const name = spriteNameForKey(input.sandboxKey);
+      try {
+        const sprite = await ensureSprite(client, name, region);
+        const r = await sandboxCodeTask(sprite, {
+          repoUrl: input.repoUrl,
+          baseBranch: input.baseBranch,
+          targetBranch: input.targetBranch,
+          task: input.task,
+          githubToken,
+          anthropicKey,
+          model: input.model,
+          timeoutMs: input.timeoutMs ?? cfgTimeout,
+        });
+        const content = r.timedOut
+          ? `Claude run timed out in sandbox "${name}" on ${r.branch}.`
+          : `${r.pushed ? 'Pushed' : 'No changes pushed'} to ${r.branch} (${r.headSha?.slice(0, 12) ?? '?'}) in sandbox "${name}".`;
+        return { content, data: { sandboxKey: input.sandboxKey, spriteName: name, ...r } };
+      } catch (error) {
+        return {
+          error: `sandbox_code_task failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    },
+  );
+
+  ctx.tools.register(
+    'sandbox_release',
+    {
+      displayName: 'Release (delete) a sandbox',
+      description:
+        'Delete the Fly Sprite for a `sandboxKey` (and anything running in it). Call when the work is done; the durable result is the pushed branch/PR, so this loses nothing.',
+      parametersSchema: {
+        type: 'object',
+        required: ['sandboxKey'],
+        additionalProperties: false,
+        properties: {
+          sandboxKey: {
+            type: 'string',
+            description: 'The sandbox to release (same key used to run it).',
+          },
+        },
+      },
+    },
+    async (params): Promise<ToolResult> => {
+      const key =
+        typeof (params as Record<string, unknown>)?.sandboxKey === 'string'
+          ? ((params as Record<string, unknown>).sandboxKey as string).trim()
+          : '';
+      if (!key) return { error: 'Missing or empty required parameter: sandboxKey' };
+      const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+      if (!spritesToken)
+        return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
+      const name = spriteNameForKey(key);
+      try {
+        await flyClient(spritesToken).deleteSprite(name);
+        return {
+          content: `Released sandbox "${name}".`,
+          data: { sandboxKey: key, spriteName: name, released: true },
+        };
+      } catch (error) {
+        return {
+          error: `sandbox_release failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
     },

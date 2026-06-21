@@ -125,3 +125,159 @@ export async function sandboxRun(
     timedOut: run.timedOut,
   };
 }
+
+/**
+ * Shell that brings the repo to `targetBranch` in `workDir`, ready for editing:
+ *  - reuse-or-clone (repo-match guard, like buildCheckoutScript);
+ *  - if `targetBranch` already exists on origin, continue it (preserve prior
+ *    iterations); otherwise create it from `baseBranch`. Pure (testable).
+ */
+export function buildCodeTaskCheckoutScript(input: {
+  repoUrl: string;
+  baseBranch: string;
+  targetBranch: string;
+  workDir: string;
+}): string {
+  const work = shellQuote(input.workDir);
+  const url = shellQuote(input.repoUrl);
+  return [
+    buildGitCredentialSetup(),
+    `if [ "$(cd ${work} 2>/dev/null && git remote get-url origin 2>/dev/null)" = ${url} ]; then`,
+    `  cd ${work} && git fetch origin --prune;`,
+    `else`,
+    `  rm -rf ${work} && git clone ${url} ${work} && cd ${work};`,
+    `fi`,
+    `cd ${work} && git fetch origin --prune`,
+    // Continue the target branch if it exists on origin, else branch from base.
+    `if git show-ref --verify --quiet "refs/remotes/origin/$TB"; then git checkout -B "$TB" "origin/$TB"; ` +
+      `else git checkout -B "$TB" "origin/$BB" 2>/dev/null || git checkout -B "$TB"; fi`,
+  ].join('\n');
+}
+
+export interface SandboxCodeTaskInput {
+  repoUrl: string;
+  baseBranch: string;
+  targetBranch: string;
+  /** Instruction handed to `claude -p` inside the Sprite (it edits files only). */
+  task: string;
+  /** Push-capable GitHub token. */
+  githubToken?: string;
+  /** Anthropic API key for the in-sandbox Claude run. */
+  anthropicKey?: string;
+  model?: string;
+  timeoutMs?: number;
+  workDir?: string;
+}
+
+export interface SandboxCodeTaskResult {
+  branch: string;
+  headSha: string | null;
+  pushed: boolean;
+  summary: string;
+  costUsd: number | null;
+  claudeExitCode: number | null;
+  timedOut: boolean;
+  pushOutput: string;
+}
+
+/**
+ * Run Claude in the Sprite to perform a coding task on `targetBranch`, then commit
+ * and **push from inside the sandbox**. Claude only edits files; the tool drives
+ * git (so Claude never needs the token). Mirrors the validated spike.
+ */
+export async function sandboxCodeTask(
+  sprite: Sprite,
+  input: SandboxCodeTaskInput,
+): Promise<SandboxCodeTaskResult> {
+  const workDir = input.workDir ?? SANDBOX_WORK_DIR;
+  const gitEnv = {
+    ...(input.githubToken ? { GH_TOKEN: input.githubToken } : {}),
+    TB: input.targetBranch,
+    BB: input.baseBranch,
+  };
+
+  const checkout = await execReliable(sprite, {
+    command: 'sh',
+    args: [
+      '-c',
+      buildCodeTaskCheckoutScript({
+        repoUrl: input.repoUrl,
+        baseBranch: input.baseBranch,
+        targetBranch: input.targetBranch,
+        workDir,
+      }),
+    ],
+    env: gitEnv,
+    timeoutMs: input.timeoutMs ?? 180_000,
+    id: randomUUID(),
+  });
+  if (checkout.exitCode !== 0) {
+    return {
+      branch: input.targetBranch,
+      headSha: null,
+      pushed: false,
+      summary: `Failed to prepare branch ${input.targetBranch}: ${checkout.stderr.slice(0, 400)}`,
+      costUsd: null,
+      claudeExitCode: null,
+      timedOut: checkout.timedOut,
+      pushOutput: '',
+    };
+  }
+
+  // Claude edits files only (acceptEdits; isolated VM). No git, no token.
+  const claudeArgs = [
+    '-p',
+    input.task,
+    '--output-format',
+    'json',
+    '--permission-mode',
+    'acceptEdits',
+  ];
+  if (input.model) claudeArgs.push('--model', input.model);
+  const claudeCmd = `cd ${shellQuote(workDir)} && claude ${claudeArgs.map(shellQuote).join(' ')} 2>&1`;
+  const claude = await execReliable(sprite, {
+    command: 'sh',
+    args: ['-c', claudeCmd],
+    env: input.anthropicKey ? { ANTHROPIC_API_KEY: input.anthropicKey } : undefined,
+    timeoutMs: input.timeoutMs,
+    id: randomUUID(),
+  });
+  let summary = '';
+  let costUsd: number | null = null;
+  try {
+    const j = JSON.parse(claude.stdout.slice(claude.stdout.indexOf('{')));
+    summary = typeof j.result === 'string' ? j.result : '';
+    costUsd = typeof j.total_cost_usd === 'number' ? j.total_cost_usd : null;
+  } catch {
+    summary = claude.stdout.slice(-400);
+  }
+
+  // Commit + push from the sandbox.
+  const commitMsg = `sandbox: ${input.task.slice(0, 60).replace(/\s+/g, ' ')}`;
+  const pushScript =
+    `cd ${shellQuote(workDir)} && git add -A && ` +
+    `(git diff --cached --quiet && echo NOCHANGES || ` +
+    `(git commit -q -m ${shellQuote(commitMsg)} && git push -u origin "$TB" 2>&1)); ` +
+    `git rev-parse HEAD`;
+  const push = await execReliable(sprite, {
+    command: 'sh',
+    args: ['-c', pushScript],
+    env: gitEnv,
+    timeoutMs: input.timeoutMs ?? 180_000,
+    id: randomUUID(),
+  });
+  const pushOutput = push.stdout.trim();
+  const headSha = pushOutput.split('\n').pop() ?? null;
+  const pushed = !pushOutput.includes('NOCHANGES') && /->|new branch|up to date/.test(pushOutput);
+
+  return {
+    branch: input.targetBranch,
+    headSha,
+    pushed,
+    summary: summary.slice(0, 600),
+    costUsd,
+    claudeExitCode: claude.exitCode,
+    timedOut: claude.timedOut,
+    pushOutput: pushOutput.slice(-300),
+  };
+}
