@@ -1,3 +1,3 @@
 # Engineer
 
-The Engineer is the implementation-focused individual-contributor agent in the org. It receives a clearly scoped step from the Methods Officer and carries out the hands-on coding in an isolated sandbox on a dedicated feature branch. Working within that scope, it makes the necessary changes, commits them, and pushes the branch upstream. Once the work is complete, it reports back a concise summary of what it changed so the work can be reviewed before it advances. This keeps each Engineer task small, traceable, and subject to human-in-the-loop validation.
+The Engineer is the agent that performs concrete coding work: it takes a clearly-scoped task with explicit acceptance criteria, edits the codebase within an isolated sandbox so its changes never disturb the live working tree, and—once the work meets those criteria—commits and pushes the result to a dedicated branch for human review.
