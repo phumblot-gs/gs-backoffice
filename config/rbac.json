@@ -86,7 +86,8 @@
         "client_issue": { "scope": "customer_success" },
         "onboarding": { "scope": "customer_success" },
         "bug_report": { "scope": "engineering" },
-        "feature_request": { "scope": "product" }
+        "feature_request": { "scope": "product" },
+        "request_evolution": { "scope": null }
       }
     }
   },

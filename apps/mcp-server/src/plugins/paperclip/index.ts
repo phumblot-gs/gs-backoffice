@@ -38,6 +38,12 @@ export function isSensitiveProcess(title: string | undefined | null): boolean {
 // no metadata field). The fenced JSON block is the source of truth re-read on approval.
 const APPROVAL_MARKER = 'gs-approval-request';
 
+// The self-evolution intake process (leadership-reserved, sensitive). When it goes
+// through the approval gate we ALSO emit the evolution lifecycle's CEO-side events
+// (plan_proposed on request, plan_accepted on approval) so the self-development loop
+// is auditable end-to-end alongside the bridge's backoffice.evolution.* events.
+const REQUEST_EVOLUTION_CODE = 'request_evolution';
+
 interface ApprovalPayload {
   kind: typeof APPROVAL_MARKER;
   routineId: string;
@@ -460,6 +466,35 @@ export class PaperclipPlugin implements ServicePlugin {
     }
   }
 
+  /**
+   * Best-effort EVT publish for the self-evolution lifecycle (CEO-side gate events:
+   * backoffice.evolution.plan_proposed / plan_accepted). Mirrors the bridge's
+   * backoffice.evolution.* events but scoped here to the approval ticket. Never throws.
+   */
+  private async publishEvolution(
+    eventType: string,
+    payload: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<void> {
+    if (!this.evtClient) return;
+    try {
+      const event = createBackofficeEvent(
+        eventType,
+        { userId: context.userId, accountId: this.evtAccountId, role: context.groups[0] },
+        {
+          accountId: this.evtAccountId,
+          resourceType: 'evolution',
+          resourceId: String(payload.ticketId ?? ''),
+        },
+        payload,
+        this.environment,
+      );
+      await this.evtClient.publish(event);
+    } catch (err) {
+      this.logger.warn({ error: err, eventType }, 'EVT evolution publish failed (non-fatal)');
+    }
+  }
+
   /** Create the approval-request ticket for a sensitive process (does NOT run it). */
   private async createApprovalRequest(
     match: Record<string, unknown>,
@@ -496,6 +531,14 @@ export class PaperclipPlugin implements ServicePlugin {
       },
       context,
     );
+    // Self-evolution intake: an evolution has been proposed and awaits the CEO gate.
+    if (code.toLowerCase() === REQUEST_EVOLUTION_CODE) {
+      await this.publishEvolution(
+        'backoffice.evolution.plan_proposed',
+        { ticketId, processCode: code, requestedBy: context.userEmail, notes: input.notes },
+        context,
+      );
+    }
     const who = scope ? `a **${scope}** approver` : 'a member of leadership';
     return {
       content: [
@@ -616,6 +659,21 @@ export class PaperclipPlugin implements ServicePlugin {
         },
         context,
       );
+      // Self-evolution intake: the CEO accepted the request — the Methods Officer loop
+      // now runs. Completes the evolution lifecycle's CEO-side gate (plan_accepted).
+      if (payload.processCode.toLowerCase() === REQUEST_EVOLUTION_CODE) {
+        await this.publishEvolution(
+          'backoffice.evolution.plan_accepted',
+          {
+            ticketId: input.ticketId,
+            processCode: payload.processCode,
+            approver: context.userEmail,
+            requestedBy: payload.requestedBy,
+            runTicket,
+          },
+          context,
+        );
+      }
       const ref = runTicket
         ? `ticket **${runTicket}** — track with henri_ticket_status`
         : `run **${runId || '(queued)'}**`;

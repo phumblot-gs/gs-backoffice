@@ -178,6 +178,16 @@ describe('PerCompanyRBACConfigSchema', () => {
       PerCompanyRBACConfigSchema.parse({ companies: { acme: { groups: { Bad: { x: 1 } } } } }),
     ).toThrow();
   });
+
+  it('accepts a leadership-reserved process (scope: null) in the catalog', () => {
+    expect(() =>
+      PerCompanyRBACConfigSchema.parse({
+        companies: {
+          acme: { groups: {}, processes: { request_evolution: { scope: null } } },
+        },
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('resolveCompanyAccess', () => {
@@ -246,5 +256,15 @@ describe('notifyScopeForRepo', () => {
     );
     const cfg = PerCompanyRBACConfigSchema.parse(raw);
     expect(notifyScopeForRepo(cfg, 'phumblot-gs/gs-backoffice')).toBe('general');
+    // request_evolution is the leadership-reserved self-evolution intake: present in
+    // the catalog with a null scope (leadership-only approval), and NOT in any group's
+    // workflow allowlist except leadership's "*".
+    const grafmaker = cfg.companies.grafmaker;
+    expect(grafmaker.processes?.request_evolution).toEqual({ scope: null });
+    for (const [name, group] of Object.entries(grafmaker.groups)) {
+      const wf = group.workflows ?? [];
+      if (wf.includes('*')) continue; // leadership
+      expect(wf, `${name} must not list request_evolution`).not.toContain('request_evolution');
+    }
   });
 });
