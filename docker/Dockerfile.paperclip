@@ -27,7 +27,7 @@ RUN pnpm install --frozen-lockfile \
 # Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
 RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
   && cp -r packages/sandbox-fly-sprites/dist /opt/gs-plugins/plugin-fly-sprites/dist \
-  && cp packages/sandbox-fly-sprites/package.json /opt/gs-plugins/plugin-fly-sprites/package.json \
+  && node -e "const p=require('/repo/packages/sandbox-fly-sprites/package.json'); require('fs').writeFileSync('/opt/gs-plugins/plugin-fly-sprites/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,paperclipPlugin:p.paperclipPlugin,dependencies:p.dependencies}, null, 2))" \
   && cd /opt/gs-plugins/plugin-fly-sprites \
   && npm install --omit=dev --no-package-lock
 # Standalone bundle for the agent-facing sandbox MCP server (stdio). NOT a Paperclip
@@ -35,7 +35,7 @@ RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
 # calls to the deployed sandbox plugin's executeTool route. Vendor it + its prod deps.
 RUN mkdir -p /opt/gs-agent-tools/agent-sandbox-mcp \
   && cp -r apps/agent-sandbox-mcp/dist /opt/gs-agent-tools/agent-sandbox-mcp/dist \
-  && cp apps/agent-sandbox-mcp/package.json /opt/gs-agent-tools/agent-sandbox-mcp/package.json \
+  && node -e "const p=require('/repo/apps/agent-sandbox-mcp/package.json'); require('fs').writeFileSync('/opt/gs-agent-tools/agent-sandbox-mcp/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,bin:p.bin,dependencies:p.dependencies}, null, 2))" \
   && cd /opt/gs-agent-tools/agent-sandbox-mcp \
   && npm install --omit=dev --no-package-lock
 # MCP config that points `claude` at the baked stdio server. Attach to an agent via
