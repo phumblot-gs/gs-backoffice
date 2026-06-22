@@ -7,7 +7,7 @@
     "agent-sandbox-mcp": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --external:@modelcontextprotocol/sdk --external:zod",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint src/",
@@ -20,7 +20,10 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@gs-backoffice/core": "workspace:*",
+    "@gs-backoffice/evt-client": "workspace:*",
     "@types/node": "^22.15.0",
+    "esbuild": "^0.24.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"

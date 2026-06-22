@@ -9,6 +9,8 @@
  * worker env (forwarded by the ADAPTER_ENV_PASSTHROUGH patch).
  */
 import { readFileSync } from 'node:fs';
+import { EvtClient } from '@gs-backoffice/evt-client';
+import { createBackofficeEvent } from '@gs-backoffice/core';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -79,35 +81,29 @@ export function buildDigestText(prs: ReviewPr[]): string {
   return `☀️ ${prs.length} PR(s) en attente de revue :\n${lines.join('\n')}`;
 }
 
-/** Emit a backoffice.notify.google_chat event (best-effort). Returns true on success. */
+/**
+ * Emit a backoffice.notify.google_chat event via the shared EvtClient (best-effort).
+ * Returns true on success; never throws.
+ */
 export async function emitChatNotify(
   text: string,
   scope: string,
   env: NodeJS.ProcessEnv,
-  fetchImpl: FetchLike = fetch as unknown as FetchLike,
 ): Promise<boolean> {
-  const url = (env.EVT_API_URL || '').trim().replace(/\/+$/, '');
-  const key = (env.EVT_API_KEY || '').trim();
+  const baseUrl = (env.EVT_API_URL || '').trim();
+  const apiKey = (env.EVT_API_KEY || '').trim();
   const accountId = (env.EVT_ACCOUNT_ID || '').trim();
-  if (!url || !key || !accountId) return false;
-  const event = {
-    eventType: 'backoffice.notify.google_chat',
-    source: {
-      application: 'gs-backoffice',
-      version: '0.1.0',
-      environment: env.NODE_ENV === 'production' ? 'production' : 'staging',
-    },
-    actor: { userId: 'pr-review-digest', accountId, role: 'system' },
-    scope: { accountId, resourceType: 'digest', resourceId: 'pr-review' },
-    payload: { text, scope },
-  };
+  if (!baseUrl || !apiKey || !accountId) return false;
+  const event = createBackofficeEvent(
+    'backoffice.notify.google_chat',
+    { userId: 'pr-review-digest', accountId, role: 'system' },
+    { accountId, resourceType: 'digest', resourceId: 'pr-review' },
+    { text, scope },
+    env.NODE_ENV === 'production' ? 'production' : 'staging',
+  );
   try {
-    const res = await fetchImpl(`${url}/v1/events`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(event),
-    });
-    return res.ok;
+    await new EvtClient({ baseUrl, apiKey }).publish(event);
+    return true;
   } catch {
     return false;
   }
@@ -135,6 +131,6 @@ export async function runPrReviewDigest(
       deps.logger?.warn?.('pr-review-digest: repo failed', { repo, error: String(err) });
     }
   }
-  const sent = await emitChatNotify(buildDigestText(all), 'general', deps.env, fetchImpl);
+  const sent = await emitChatNotify(buildDigestText(all), 'general', deps.env);
   return { repos: repos.length, prs: all.length, sent };
 }
