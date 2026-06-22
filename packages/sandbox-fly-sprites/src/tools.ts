@@ -2,6 +2,7 @@ import type { PluginContext, ToolResult, ScopeKey } from '@paperclipai/plugin-sd
 import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
+import { runPrReviewDigest } from './digest.js';
 
 /** Fly Sprite names must be lowercase alphanumeric + hyphens. Derive a stable,
  *  collision-resistant name from the caller's `sandboxKey`. Pure (testable). */
@@ -423,5 +424,20 @@ export function registerSandboxTools(ctx: PluginContext): void {
     }
     const res = await reapIdleSandboxes(ctx, { ttlDays, spritesToken, now: Date.now() });
     ctx.logger.info('sandbox-reaper: reclaimed idle sandboxes', { ...res, ttlDays });
+  });
+
+  // PR-review digest: weekday-morning summary of open PRs awaiting review → Google Chat.
+  ctx.jobs.register('pr-review-digest', async () => {
+    const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+    const token =
+      envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN') ??
+      envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+    if (!token) {
+      ctx.logger.warn('pr-review-digest: no GitHub read token, skipping');
+      return;
+    }
+    const rbacPath = (process.env.GS_RBAC_PATH || '/opt/gs-agent-tools/rbac.json').trim();
+    const res = await runPrReviewDigest({ rbacPath, token, env: process.env, logger: ctx.logger });
+    ctx.logger.info('pr-review-digest: posted', res);
   });
 }
