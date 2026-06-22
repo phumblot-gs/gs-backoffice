@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   resolvePermissions,
   resolveCompanyAccess,
   resolveAccessibleCompanies,
   canApprove,
+  notifyScopeForRepo,
   RBACConfigSchema,
   PerCompanyRBACConfigSchema,
 } from './rbac.js';
@@ -220,5 +223,28 @@ describe('resolveAccessibleCompanies', () => {
       'globex',
     ]);
     expect(resolveAccessibleCompanies(perCompany, ['Nope'])).toEqual([]);
+  });
+});
+
+describe('notifyScopeForRepo', () => {
+  it('returns the mapped scope (lowercased) for a known repo', () => {
+    const cfg: PerCompanyRBACConfig = {
+      companies: {},
+      repos: { 'phumblot-gs/gs-backoffice': 'Engineering' },
+    };
+    expect(notifyScopeForRepo(cfg, 'phumblot-gs/gs-backoffice')).toBe('engineering');
+  });
+
+  it('defaults to "general" for an unmapped repo or when repos is absent', () => {
+    expect(notifyScopeForRepo({ companies: {}, repos: {} }, 'org/other')).toBe('general');
+    expect(notifyScopeForRepo({ companies: {} }, 'org/other')).toBe('general');
+  });
+
+  it('validates the shipped config/rbac.json (repos present, maps to a scope)', () => {
+    const raw = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../../config/rbac.json', import.meta.url)), 'utf8'),
+    );
+    const cfg = PerCompanyRBACConfigSchema.parse(raw);
+    expect(notifyScopeForRepo(cfg, 'phumblot-gs/gs-backoffice')).toBe('general');
   });
 });
