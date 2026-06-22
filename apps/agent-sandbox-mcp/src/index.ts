@@ -22,10 +22,26 @@ import {
   REPORT_STATUSES,
   type SandboxToolName,
 } from './proxy.js';
-import { emitNotify, resolveNotifyScope } from './evt.js';
+import { emitNotify, resolveNotifyScope, emitToolInvoked, emitEvolution } from './evt.js';
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], isError };
+}
+
+type ToolReply = { content: { type: 'text'; text: string }[]; isError: boolean };
+
+/**
+ * Run a tool handler and emit `backoffice.audit.tool_invoked` (iso with employee tool
+ * calls). Best-effort: the audit emit never changes or blocks the tool result.
+ */
+async function withAudit(
+  tool: string,
+  category: string,
+  run: () => Promise<ToolReply>,
+): Promise<ToolReply> {
+  const r = await run();
+  await emitToolInvoked(tool, category, !r.isError);
+  return r;
 }
 
 async function call(toolName: SandboxToolName, parameters: Record<string, unknown>) {
@@ -69,7 +85,7 @@ export function createServer(): McpServer {
         .describe('Which GitHub credential to expose to git in the sandbox (default read_only).'),
       timeoutMs: z.number().optional().describe('Hard wall-clock limit for the command (ms).'),
     },
-    (args) => call('sandbox_run', args),
+    (args) => withAudit('sandbox_run', 'sandbox', () => call('sandbox_run', args)),
   );
 
   server.tool(
@@ -91,7 +107,7 @@ export function createServer(): McpServer {
       model: z.string().optional().describe('Optional Claude model for the in-sandbox run.'),
       timeoutMs: z.number().optional().describe('Hard wall-clock limit (ms; host caps at 15min).'),
     },
-    (args) => call('sandbox_code_task', args),
+    (args) => withAudit('sandbox_code_task', 'sandbox', () => call('sandbox_code_task', args)),
   );
 
   server.tool(
@@ -100,7 +116,7 @@ export function createServer(): McpServer {
     {
       sandboxKey: z.string().describe('The sandbox to release (same key used to run it).'),
     },
-    (args) => call('sandbox_release', args),
+    (args) => withAudit('sandbox_release', 'sandbox', () => call('sandbox_release', args)),
   );
 
   server.tool(
@@ -117,22 +133,32 @@ export function createServer(): McpServer {
         .optional()
         .describe('Issue to update; defaults to the current issue (PAPERCLIP_TASK_ID).'),
     },
-    async (args) => {
-      let cfg;
-      try {
-        cfg = readProxyConfig();
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-      try {
-        const r = await reportProgress(cfg, args);
-        return textResult(
-          `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}).`.trim(),
-        );
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-    },
+    (args) =>
+      withAudit('report_progress', 'governance', async () => {
+        let cfg;
+        try {
+          cfg = readProxyConfig();
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+        try {
+          const r = await reportProgress(cfg, args);
+          // Lifecycle: a final disposition or an escalation to the CEO.
+          if (args.status === 'done') {
+            await emitEvolution('backoffice.evolution.completed', { identifier: r.identifier });
+          } else if (args.status === 'blocked' || args.status === 'in_review') {
+            await emitEvolution('backoffice.evolution.escalated', {
+              status: args.status,
+              identifier: r.identifier,
+            });
+          }
+          return textResult(
+            `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}).`.trim(),
+          );
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+      }),
   );
 
   server.tool(
@@ -147,13 +173,14 @@ export function createServer(): McpServer {
         .optional()
         .describe('Truncate the diff to this many bytes (default 50000).'),
     },
-    async (args) => {
-      try {
-        return textResult(await getDiff(args));
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-    },
+    (args) =>
+      withAudit('get_diff', 'review', async () => {
+        try {
+          return textResult(await getDiff(args));
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+      }),
   );
 
   server.tool(
@@ -166,31 +193,38 @@ export function createServer(): McpServer {
       title: z.string().describe('PR title.'),
       body: z.string().optional().describe('PR description (markdown).'),
     },
-    async (args) => {
-      try {
-        const r = await openPr(args);
-        // Best-effort: notify the right Google Chat channel that a PR needs review
-        // (Gate 3). Never let a notify failure fail the tool — the PR is the result.
-        let notified = false;
+    (args) =>
+      withAudit('open_pr', 'governance', async () => {
         try {
-          const { owner, repo } = parseGitHubRepo(args.repoUrl);
-          const scope = resolveNotifyScope(`${owner}/${repo}`);
-          notified = await emitNotify({
-            text: `🔍 PR #${r.number} needs review: ${args.title}\n${r.url}`,
-            scope,
-            resourceType: 'pull_request',
-            resourceId: `${owner}/${repo}#${r.number}`,
+          const r = await openPr(args);
+          // Lifecycle: the evolution reached a reviewable PR (Gate 3).
+          await emitEvolution('backoffice.evolution.pr_opened', {
+            number: r.number,
+            url: r.url,
+            title: args.title,
           });
-        } catch {
-          /* notify is best-effort */
+          // Best-effort: notify the right Google Chat channel that a PR needs review
+          // (Gate 3). Never let a notify failure fail the tool — the PR is the result.
+          let notified = false;
+          try {
+            const { owner, repo } = parseGitHubRepo(args.repoUrl);
+            const scope = resolveNotifyScope(`${owner}/${repo}`);
+            notified = await emitNotify({
+              text: `🔍 PR #${r.number} needs review: ${args.title}\n${r.url}`,
+              scope,
+              resourceType: 'pull_request',
+              resourceId: `${owner}/${repo}#${r.number}`,
+            });
+          } catch {
+            /* notify is best-effort */
+          }
+          return textResult(
+            `Opened PR #${r.number}: ${r.url}${notified ? ' (review notification sent)' : ''}`,
+          );
+        } catch (err) {
+          return textResult((err as Error).message, true);
         }
-        return textResult(
-          `Opened PR #${r.number}: ${r.url}${notified ? ' (review notification sent)' : ''}`,
-        );
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-    },
+      }),
   );
 
   server.tool(
@@ -209,22 +243,30 @@ export function createServer(): McpServer {
         .optional()
         .describe('Keep your issue blocked until this step is done (default true).'),
     },
-    async (args) => {
-      let cfg;
-      try {
-        cfg = readProxyConfig();
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-      try {
-        const r = await createChildIssue(cfg, args);
-        return textResult(
-          `Created child issue ${r.identifier ?? r.id} (status: ${r.status ?? '?'}).`,
-        );
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-    },
+    (args) =>
+      withAudit('create_child_issue', 'governance', async () => {
+        let cfg;
+        try {
+          cfg = readProxyConfig();
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+        try {
+          const r = await createChildIssue(cfg, args);
+          // Lifecycle: a new evolution step was decomposed under the current issue.
+          await emitEvolution('backoffice.evolution.step_created', {
+            childId: r.id,
+            childIdentifier: r.identifier,
+            assigneeAgentId: args.assigneeAgentId,
+            title: args.title,
+          });
+          return textResult(
+            `Created child issue ${r.identifier ?? r.id} (status: ${r.status ?? '?'}).`,
+          );
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+      }),
   );
 
   server.tool(
@@ -233,23 +275,24 @@ export function createServer(): McpServer {
     {
       issueId: z.string().describe('The issue to read (e.g. a child step you created).'),
     },
-    async (args) => {
-      let cfg;
-      try {
-        cfg = readProxyConfig();
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-      try {
-        const v = await getIssue(cfg, args.issueId);
-        const comments = v.comments.map((c) => `- ${c.body}`).join('\n\n');
-        return textResult(
-          `${v.identifier ?? v.id} "${v.title ?? ''}" — status: ${v.status ?? '?'}, assignee: ${v.assigneeAgentId ?? 'none'}\n\nLatest comments:\n${comments || '(none)'}`,
-        );
-      } catch (err) {
-        return textResult((err as Error).message, true);
-      }
-    },
+    (args) =>
+      withAudit('get_issue', 'review', async () => {
+        let cfg;
+        try {
+          cfg = readProxyConfig();
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+        try {
+          const v = await getIssue(cfg, args.issueId);
+          const comments = v.comments.map((c) => `- ${c.body}`).join('\n\n');
+          return textResult(
+            `${v.identifier ?? v.id} "${v.title ?? ''}" — status: ${v.status ?? '?'}, assignee: ${v.assigneeAgentId ?? 'none'}\n\nLatest comments:\n${comments || '(none)'}`,
+          );
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+      }),
   );
 
   return server;

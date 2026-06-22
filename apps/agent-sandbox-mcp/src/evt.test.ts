@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emitNotify, resolveNotifyScope, __resetRbacCache } from './evt.js';
+import {
+  emitNotify,
+  emitToolInvoked,
+  emitEvolution,
+  resolveNotifyScope,
+  __resetRbacCache,
+} from './evt.js';
 
 beforeEach(() => __resetRbacCache());
 afterEach(() => vi.unstubAllGlobals());
@@ -63,6 +69,65 @@ describe('emitNotify (via shared EvtClient)', () => {
     // 403 → EvtClient throws immediately (no retry/backoff) → emitNotify swallows it.
     vi.stubGlobal('fetch', async () => ({ ok: false, status: 403, text: async () => 'forbidden' }));
     expect(await emitNotify({ text: 't', scope: 'general' }, EVT_ENV)).toBe(false);
+  });
+});
+
+describe('emitToolInvoked (audit, iso with employee tool calls)', () => {
+  it('publishes backoffice.audit.tool_invoked with tool/category/ok + run context', async () => {
+    const cap: { init?: RequestInit } = {};
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      cap.init = init;
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '{}' };
+    });
+    const ok = await emitToolInvoked('open_pr', 'governance', true, {
+      ...EVT_ENV,
+      PAPERCLIP_RUN_ID: 'run-9',
+      PAPERCLIP_TASK_ID: 'GRA-12',
+    } as NodeJS.ProcessEnv);
+    expect(ok).toBe(true);
+    const body = JSON.parse((cap.init as RequestInit).body as string);
+    expect(body.eventType).toBe('backoffice.audit.tool_invoked');
+    expect(body.scope).toMatchObject({ resourceType: 'tool', resourceId: 'open_pr' });
+    expect(body.payload).toMatchObject({
+      tool: 'open_pr',
+      category: 'governance',
+      ok: true,
+      agentId: 'agent-1',
+      runId: 'run-9',
+      issueId: 'GRA-12',
+    });
+  });
+
+  it('no-ops (false) when EVT env is missing', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    expect(await emitToolInvoked('get_diff', 'review', false, {} as NodeJS.ProcessEnv)).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('emitEvolution (lifecycle)', () => {
+  it('publishes the lifecycle event scoped to the run issue, merging payload', async () => {
+    const cap: { init?: RequestInit } = {};
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      cap.init = init;
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '{}' };
+    });
+    const ok = await emitEvolution(
+      'backoffice.evolution.pr_opened',
+      { number: 7, url: 'https://gh/pr/7' },
+      { ...EVT_ENV, PAPERCLIP_TASK_ID: 'GRA-12' } as NodeJS.ProcessEnv,
+    );
+    expect(ok).toBe(true);
+    const body = JSON.parse((cap.init as RequestInit).body as string);
+    expect(body.eventType).toBe('backoffice.evolution.pr_opened');
+    expect(body.scope).toMatchObject({ resourceType: 'evolution', resourceId: 'GRA-12' });
+    expect(body.payload).toMatchObject({
+      issueId: 'GRA-12',
+      agentId: 'agent-1',
+      number: 7,
+      url: 'https://gh/pr/7',
+    });
   });
 });
 
