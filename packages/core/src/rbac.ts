@@ -46,9 +46,24 @@ export type CompanyConfig = z.infer<typeof CompanyConfigSchema>;
 
 export const PerCompanyRBACConfigSchema = z.object({
   companies: z.record(z.string(), CompanyConfigSchema),
+  // Maps a GitHub repo ("owner/repo") to the notification SCOPE used for routing
+  // (e.g. PR-review notifications). The scope then selects the Google Chat channel
+  // via GOOGLE_CHAT_WEBHOOKS (the notify-consumer falls back to "general"). A repo
+  // not listed here ⇒ "general". Lets ops route per-repo channels without code.
+  repos: z.record(z.string(), z.string()).optional(),
 });
 
 export type PerCompanyRBACConfig = z.infer<typeof PerCompanyRBACConfigSchema>;
+
+/**
+ * The notification scope for a repo ("owner/repo"), used to route Google Chat
+ * notifications (e.g. a PR awaiting review). Defaults to "general" when the repo is
+ * not mapped. The scope is lowercased to match the notify-consumer's channel keys.
+ */
+export function notifyScopeForRepo(config: PerCompanyRBACConfig, repo: string): string {
+  const scope = config.repos?.[repo.trim()];
+  return (scope && scope.trim() ? scope : 'general').toLowerCase();
+}
 
 export interface ResolvedAccess {
   /** Flat permission strings, e.g. "notion.read". */

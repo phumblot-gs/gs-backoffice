@@ -18,9 +18,11 @@ import {
   getDiff,
   createChildIssue,
   getIssue,
+  parseGitHubRepo,
   REPORT_STATUSES,
   type SandboxToolName,
 } from './proxy.js';
+import { emitNotify, resolveNotifyScope } from './evt.js';
 
 function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], isError };
@@ -167,7 +169,24 @@ export function createServer(): McpServer {
     async (args) => {
       try {
         const r = await openPr(args);
-        return textResult(`Opened PR #${r.number}: ${r.url}`);
+        // Best-effort: notify the right Google Chat channel that a PR needs review
+        // (Gate 3). Never let a notify failure fail the tool — the PR is the result.
+        let notified = false;
+        try {
+          const { owner, repo } = parseGitHubRepo(args.repoUrl);
+          const scope = resolveNotifyScope(`${owner}/${repo}`);
+          notified = await emitNotify({
+            text: `🔍 PR #${r.number} needs review: ${args.title}\n${r.url}`,
+            scope,
+            resourceType: 'pull_request',
+            resourceId: `${owner}/${repo}#${r.number}`,
+          });
+        } catch {
+          /* notify is best-effort */
+        }
+        return textResult(
+          `Opened PR #${r.number}: ${r.url}${notified ? ' (review notification sent)' : ''}`,
+        );
       } catch (err) {
         return textResult((err as Error).message, true);
       }
