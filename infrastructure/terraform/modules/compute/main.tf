@@ -189,6 +189,22 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "PAPERCLIP_SECRETS_MASTER_KEY"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_SECRETS_MASTER_KEY::"
       },
+      # EVT — so agent-run subprocesses (the sandbox MCP bridge: PR-review notify) and
+      # the sandbox plugin worker (PR-review digest job) can publish backoffice.notify.*
+      # events. The bridge inherits this container env; the plugin worker gets it via
+      # the ADAPTER_ENV_PASSTHROUGH patch.
+      {
+        name      = "EVT_API_URL"
+        valueFrom = "${var.app_secrets_arn}:EVT_API_URL::"
+      },
+      {
+        name      = "EVT_API_KEY"
+        valueFrom = "${var.app_secrets_arn}:EVT_API_KEY::"
+      },
+      {
+        name      = "EVT_ACCOUNT_ID"
+        valueFrom = "${var.app_secrets_arn}:EVT_ACCOUNT_ID::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"
