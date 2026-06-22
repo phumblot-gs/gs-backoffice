@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,14 @@ import {
   runPrReviewDigest,
   type ReviewPr,
 } from './digest.js';
+
+afterEach(() => vi.unstubAllGlobals());
+
+const EVT_ENV = {
+  EVT_API_URL: 'https://evt',
+  EVT_API_KEY: 'k',
+  EVT_ACCOUNT_ID: '16',
+} as NodeJS.ProcessEnv;
 
 function rbacFile(repos?: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'rbac-'));
@@ -23,6 +31,17 @@ function fakeFetch(handler: (url: string) => { ok: boolean; status: number; body
     const r = handler(url);
     return { ok: r.ok, status: r.status, text: async () => r.body };
   }) as never;
+}
+
+/** Stub global fetch (used by EvtClient.publish); returns a captor of the last call. */
+function stubEvtFetch(): { url?: string; body?: string } {
+  const cap: { url?: string; body?: string } = {};
+  vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+    cap.url = url;
+    cap.body = init.body as string;
+    return { ok: true, status: 200, json: async () => ({ eventId: 'e1' }), text: async () => '{}' };
+  });
+  return cap;
 }
 
 describe('readRepoScopes', () => {
@@ -63,24 +82,15 @@ describe('buildDigestText', () => {
   });
 });
 
-describe('emitChatNotify', () => {
-  it('posts a notify event when EVT env is set', async () => {
-    const cap: { url?: string; body?: string } = {};
-    const f = (async (url: string, init: { body: string }) => {
-      cap.url = url;
-      cap.body = init.body;
-      return { ok: true, status: 200, text: async () => '' };
-    }) as never;
-    const env = {
-      EVT_API_URL: 'https://evt/',
-      EVT_API_KEY: 'k',
-      EVT_ACCOUNT_ID: '16',
-    } as NodeJS.ProcessEnv;
-    expect(await emitChatNotify('hello', 'general', env, f)).toBe(true);
+describe('emitChatNotify (via shared EvtClient)', () => {
+  it('publishes a notify event when EVT env is set', async () => {
+    const cap = stubEvtFetch();
+    expect(await emitChatNotify('hello', 'general', EVT_ENV)).toBe(true);
     expect(cap.url).toBe('https://evt/v1/events');
     const body = JSON.parse(cap.body as string);
     expect(body.eventType).toBe('backoffice.notify.google_chat');
     expect(body.payload).toEqual({ text: 'hello', scope: 'general' });
+    expect(body.actor).toMatchObject({ userId: 'pr-review-digest', accountId: '16' });
   });
   it('no-ops (false) when EVT env missing', async () => {
     expect(await emitChatNotify('x', 'general', {} as NodeJS.ProcessEnv)).toBe(false);
@@ -88,54 +98,40 @@ describe('emitChatNotify', () => {
 });
 
 describe('runPrReviewDigest', () => {
-  it('gathers PRs across configured repos and emits one digest', async () => {
-    const env = {
-      EVT_API_URL: 'https://evt',
-      EVT_API_KEY: 'k',
-      EVT_ACCOUNT_ID: '16',
-    } as NodeJS.ProcessEnv;
-    const calls: string[] = [];
-    const f = (async (url: string) => {
-      calls.push(url);
-      if (url.includes('/pulls')) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            JSON.stringify([
-              { number: 9, title: 'X', html_url: 'http://x/9', draft: false, user: { login: 'z' } },
-            ]),
-        };
-      }
-      return { ok: true, status: 200, text: async () => '' }; // EVT publish
+  it('gathers PRs across configured repos (injected GitHub fetch) and emits one digest (EvtClient)', async () => {
+    const evt = stubEvtFetch();
+    const ghCalls: string[] = [];
+    const ghFetch = (async (url: string) => {
+      ghCalls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify([
+            { number: 9, title: 'X', html_url: 'http://x/9', draft: false, user: { login: 'z' } },
+          ]),
+      };
     }) as never;
     const res = await runPrReviewDigest({
       rbacPath: rbacFile({ 'org/repo': 'general' }),
       token: 'tok',
-      env,
-      fetchImpl: f,
+      env: EVT_ENV,
+      fetchImpl: ghFetch,
     });
     expect(res).toEqual({ repos: 1, prs: 1, sent: true });
-    expect(calls.some((u) => u.includes('/repos/org/repo/pulls'))).toBe(true);
-    expect(calls.some((u) => u.endsWith('/v1/events'))).toBe(true);
+    expect(ghCalls.some((u) => u.includes('/repos/org/repo/pulls'))).toBe(true);
+    expect(evt.url).toBe('https://evt/v1/events');
   });
 
   it('still posts an all-clear digest when a repo errors', async () => {
-    const env = {
-      EVT_API_URL: 'https://evt',
-      EVT_API_KEY: 'k',
-      EVT_ACCOUNT_ID: '16',
-    } as NodeJS.ProcessEnv;
-    const f = (async (url: string) => {
-      if (url.includes('/pulls')) return { ok: false, status: 500, text: async () => 'boom' };
-      return { ok: true, status: 200, text: async () => '' };
-    }) as never;
+    stubEvtFetch();
+    const ghFetch = (async () => ({ ok: false, status: 500, text: async () => 'boom' })) as never;
     const warns: string[] = [];
     const res = await runPrReviewDigest({
       rbacPath: rbacFile({ 'org/repo': 'general' }),
       token: 'tok',
-      env,
-      fetchImpl: f,
+      env: EVT_ENV,
+      fetchImpl: ghFetch,
       logger: { warn: (m) => warns.push(m) },
     });
     expect(res.prs).toBe(0);

@@ -12,7 +12,7 @@
     "worker": "./dist/worker.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "esbuild src/worker.ts src/manifest.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --external:@paperclipai/plugin-sdk --external:@fly/sprites --external:ws",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint src/",
@@ -24,8 +24,11 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@gs-backoffice/core": "workspace:*",
+    "@gs-backoffice/evt-client": "workspace:*",
     "@types/node": "^22.15.0",
     "@types/ws": "^8.5.10",
+    "esbuild": "^0.24.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"
   }

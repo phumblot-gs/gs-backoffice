@@ -1,14 +1,18 @@
 /**
- * Best-effort EVT emission from the bridge. Used to notify (via the notify-consumer
- * → Google Chat) when a PR needs human review — the Gate-3 step. The notify-consumer
- * already handles `backoffice.notify.google_chat` (payload `{text, scope}`) and routes
- * the scope to its Chat channel, falling back to "general".
+ * EVT emission from the bridge — used to notify (via the notify-consumer → Google
+ * Chat) when a PR needs human review. Publishes through the shared
+ * `@gs-backoffice/evt-client` (`EvtClient`) + `createBackofficeEvent` so the bridge,
+ * the digest job, and the employee-facing MCP server all share ONE event definition
+ * and emission path (esbuild inlines these workspace packages into the baked bundle).
  *
- * The notify SCOPE per repo is configured in config/rbac.json (`repos: {owner/repo →
- * scope}`), baked into the image at /opt/gs-agent-tools/rbac.json (synced with RBAC at
- * deploy). Emission is best-effort: a notify failure must never fail the tool call.
+ * The notify-consumer handles `backoffice.notify.google_chat` (payload `{text, scope}`)
+ * and routes the scope to its Chat channel, falling back to "general". The per-repo
+ * scope is configured in config/rbac.json (`repos`), baked at /opt/gs-agent-tools/rbac.json.
+ * Emission is best-effort: a notify failure must never fail the tool call.
  */
 import { readFileSync } from 'node:fs';
+import { EvtClient } from '@gs-backoffice/evt-client';
+import { createBackofficeEvent } from '@gs-backoffice/core';
 
 const RBAC_PATH = (process.env.GS_RBAC_PATH || '/opt/gs-agent-tools/rbac.json').trim();
 
@@ -40,45 +44,35 @@ export interface NotifyInput {
   resourceId?: string;
 }
 
-type FetchLike = (url: string, init: RequestInit) => Promise<{ ok: boolean; status: number }>;
-
 /**
- * Emit a `backoffice.notify.google_chat` event to EVT. Returns true on success.
- * Silently no-ops (returns false) if EVT env is not configured, and never throws.
+ * Emit a `backoffice.notify.google_chat` event via the shared EvtClient. Returns true
+ * on success; silently returns false (never throws) when EVT env is unconfigured or
+ * the publish fails.
  */
 export async function emitNotify(
   input: NotifyInput,
   env: NodeJS.ProcessEnv = process.env,
-  fetchImpl: FetchLike = fetch as unknown as FetchLike,
 ): Promise<boolean> {
-  const url = (env.EVT_API_URL || '').trim().replace(/\/+$/, '');
-  const key = (env.EVT_API_KEY || '').trim();
+  const baseUrl = (env.EVT_API_URL || '').trim();
+  const apiKey = (env.EVT_API_KEY || '').trim();
   const accountId = (env.EVT_ACCOUNT_ID || '').trim();
-  if (!url || !key || !accountId) return false;
+  if (!baseUrl || !apiKey || !accountId) return false;
 
-  const event = {
-    eventType: 'backoffice.notify.google_chat',
-    source: {
-      application: 'gs-backoffice',
-      version: '0.1.0',
-      environment: env.NODE_ENV === 'production' ? 'production' : 'staging',
-    },
-    actor: { userId: (env.PAPERCLIP_AGENT_ID || 'agent').trim(), accountId, role: 'agent' },
-    scope: {
+  const event = createBackofficeEvent(
+    'backoffice.notify.google_chat',
+    { userId: (env.PAPERCLIP_AGENT_ID || 'agent').trim(), accountId, role: 'agent' },
+    {
       accountId,
       resourceType: input.resourceType || 'notification',
       resourceId: input.resourceId || 'pr-review',
     },
-    payload: { text: input.text, scope: input.scope },
-  };
+    { text: input.text, scope: input.scope },
+    env.NODE_ENV === 'production' ? 'production' : 'staging',
+  );
 
   try {
-    const res = await fetchImpl(`${url}/v1/events`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(event),
-    });
-    return res.ok;
+    await new EvtClient({ baseUrl, apiKey }).publish(event);
+    return true;
   } catch {
     return false;
   }
