@@ -36,6 +36,13 @@ const manifest: PaperclipPluginManifestV1 = {
       description: 'Delete sandbox Sprites idle beyond the configured TTL (default 7 days).',
       schedule: '0 * * * *',
     },
+    {
+      jobKey: 'pr-review-digest',
+      displayName: 'PR review digest',
+      description:
+        'Weekday-morning Google Chat digest of open PRs awaiting review (cron UTC; 06:00 = 08:00 Paris in summer / 07:00 in winter).',
+      schedule: '0 6 * * 1-5',
+    },
   ],
   entrypoints: {
     worker: './dist/worker.js',

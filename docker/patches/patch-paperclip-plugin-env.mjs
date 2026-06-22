@@ -61,6 +61,10 @@ const REPLACEMENT = `const ADAPTER_ENV_PASSTHROUGH = [
     "SANDBOX_GITHUB_TOKEN",
     "SANDBOX_GITHUB_READ_TOKEN",
     "SANDBOX_GITHUB_PUSH_TOKEN",
+    // EVT: the PR-review digest job (plugin worker) publishes notify events.
+    "EVT_API_URL",
+    "EVT_API_KEY",
+    "EVT_ACCOUNT_ID",
 ];`;
 
 // The passthrough only applies to plugins with `environment.drivers.register`.
