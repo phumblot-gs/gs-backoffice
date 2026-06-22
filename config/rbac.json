@@ -89,5 +89,8 @@
         "feature_request": { "scope": "product" }
       }
     }
+  },
+  "repos": {
+    "phumblot-gs/gs-backoffice": "general"
   }
 }

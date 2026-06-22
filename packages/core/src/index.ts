@@ -26,6 +26,7 @@ export {
   resolveCompanyAccess,
   resolveAccessibleCompanies,
   canApprove,
+  notifyScopeForRepo,
   type RBACConfig,
   type RBACGroupConfig,
   type ServicePermission,

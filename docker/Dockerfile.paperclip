@@ -38,6 +38,9 @@ RUN mkdir -p /opt/gs-agent-tools/agent-sandbox-mcp \
 # adapterConfig.extraArgs: ["--mcp-config", "/opt/gs-agent-tools/mcp-config.json"].
 RUN printf '%s\n' '{"mcpServers":{"gs-sandbox":{"command":"node","args":["/opt/gs-agent-tools/agent-sandbox-mcp/dist/index.js"]}}}' \
   > /opt/gs-agent-tools/mcp-config.json
+# Bake the RBAC config so the bridge can resolve the per-repo notify scope
+# (repos → scope) for PR-review Google Chat notifications. Synced with RBAC at deploy.
+COPY config/rbac.json /opt/gs-agent-tools/rbac.json
 
 FROM base AS production
 WORKDIR /app
