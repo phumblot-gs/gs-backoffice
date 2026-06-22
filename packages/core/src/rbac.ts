@@ -20,9 +20,10 @@ export type RBACGroupConfig = z.infer<typeof RBACGroupConfigSchema>;
 // Per-process metadata for the approval gate (Capability 2b). `scope` routes a
 // sensitive process to the right approvers: a user may approve it if they hold
 // `paperclip.approve` AND a `paperclip` scope of `*` or this exact scope.
-// A process with no catalog entry falls back to leadership-only (scope `*`).
+// `scope: null` makes it leadership-only (same as having no catalog entry) — used
+// to declare a leadership-reserved process explicitly, for auditability.
 export const ProcessConfigSchema = z.object({
-  scope: z.string(),
+  scope: z.string().nullable(),
 });
 
 export type ProcessConfig = z.infer<typeof ProcessConfigSchema>;
