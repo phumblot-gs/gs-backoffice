@@ -15,12 +15,12 @@ RUN apt-get update \
 FROM base AS plugin-build
 WORKDIR /repo
 COPY . .
-# `...<pkg>` installs each target AND its workspace dependencies (@gs-backoffice/core,
-# evt-client). Build the deps (tsc → dist) BEFORE the esbuild bundlers, which resolve
+# Full workspace install (this build stage is throwaway — only the bundled dist is
+# copied into the final image). A filtered install left @gs-backoffice/core without its
+# devDeps (typescript/@types), so its tsc build failed with spurious "unknown" types.
+# Then build the workspace deps (tsc → dist) BEFORE the esbuild bundlers, which resolve
 # @gs-backoffice/* from their built dist (the bundlers inline them).
 RUN pnpm install --frozen-lockfile \
-    --filter ...@gs-backoffice/sandbox-fly-sprites \
-    --filter ...@gs-backoffice/agent-sandbox-mcp \
   && pnpm --filter @gs-backoffice/core --filter @gs-backoffice/evt-client build \
   && pnpm --filter @gs-backoffice/sandbox-fly-sprites \
           --filter @gs-backoffice/agent-sandbox-mcp build
