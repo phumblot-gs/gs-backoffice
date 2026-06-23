@@ -77,7 +77,9 @@ const routines = Array.isArray(routinesRaw)
   : (routinesRaw.routines ?? routinesRaw.data ?? []);
 const existing = routines.find((r) => extractCode(r.title)?.toLowerCase() === CODE);
 if (existing) {
-  console.log(`Routine "${CODE}" already exists (id: ${existing.id}, title: "${existing.title}"). Nothing to do.`);
+  console.log(
+    `Routine "${CODE}" already exists (id: ${existing.id}, title: "${existing.title}"). Nothing to do.`,
+  );
   process.exit(0);
 }
 
