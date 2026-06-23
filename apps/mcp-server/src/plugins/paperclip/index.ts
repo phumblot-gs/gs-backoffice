@@ -8,6 +8,7 @@ import type {
   PluginInitConfig,
   ToolContext,
   CallToolResult,
+  ToolExtra,
 } from '../types.js';
 import { PaperclipClient } from '../../paperclip-client.js';
 
@@ -242,19 +243,24 @@ export class PaperclipPlugin implements ServicePlugin {
     return {
       name: 'henri_approve',
       description:
-        'Approve or reject a sensitive-process approval request (see henri_list_approvals). ' +
-        'On approval the process runs; you cannot approve your own request.',
+        'Decide a sensitive-process approval request (see henri_list_approvals). ' +
+        'Call with just the ticketId to open an interactive Approve / Reject prompt; ' +
+        'or pass decision directly. On approval the process runs; you cannot approve your own request.',
       schema: z.object({
         ticketId: z.string().describe('The approval ticket ID (e.g., "GRA-7")'),
-        decision: z.enum(['approve', 'reject']).describe('Your decision'),
+        decision: z
+          .enum(['approve', 'reject'])
+          .optional()
+          .describe('Your decision. Omit to be prompted interactively (Approve / Reject buttons).'),
         note: z.string().optional().describe('Optional decision note (recorded on the ticket)'),
       }),
       requiredPermission: 'paperclip.approve',
       auditCategory: 'approval.decided',
-      execute: async (input, context) =>
+      execute: async (input, context, extra) =>
         this.executeApprove(
-          input as { ticketId: string; decision: 'approve' | 'reject'; note?: string },
+          input as { ticketId: string; decision?: 'approve' | 'reject'; note?: string },
           context,
+          extra,
         ),
     };
   }
@@ -503,9 +509,11 @@ export class PaperclipPlugin implements ServicePlugin {
     return context.processes?.[code]?.scope ?? null;
   }
 
-  /** A claude.ai deep-link that opens a prefilled prompt for the approver to decide. */
+  /** A claude.ai deep-link that opens a prefilled prompt for the approver to decide.
+   * Instructs the assistant to call henri_approve with ONLY the ticketId, which opens
+   * the interactive Approve/Reject prompt (elicitation) where the client supports it. */
   private approvalDeepLink(ticketId: string, code: string): string {
-    const q = `Review back office approval request ${ticketId} for the sensitive process "${code}", then approve or reject it with henri_approve.`;
+    const q = `Review back office approval request ${ticketId} for the sensitive process "${code}": call henri_approve with just the ticketId "${ticketId}" (no decision) to open the Approve / Reject prompt, then I'll decide.`;
     return `https://claude.ai/new?q=${encodeURIComponent(q)}`;
   }
 
@@ -644,8 +652,9 @@ export class PaperclipPlugin implements ServicePlugin {
   }
 
   private async executeApprove(
-    input: { ticketId: string; decision: 'approve' | 'reject'; note?: string },
+    input: { ticketId: string; decision?: 'approve' | 'reject'; note?: string },
     context: ToolContext,
+    extra?: ToolExtra,
   ): Promise<CallToolResult> {
     try {
       const issue = await this.client.getIssue(input.ticketId);
@@ -696,10 +705,77 @@ export class PaperclipPlugin implements ServicePlugin {
         };
       }
 
-      if (input.decision === 'reject') {
+      // Resolve the decision. If the caller didn't pass one, render an interactive
+      // Approve / Reject prompt (with an optional comment) via elicitation — covering
+      // Pierre's three options in one widget. Falls back to text when the client can't
+      // render forms (elicit() returns null).
+      let decision = input.decision;
+      let note = input.note;
+      if (!decision) {
+        const elicited = extra?.elicit
+          ? await extra.elicit({
+              message:
+                `Decide approval ${input.ticketId} — ${payload.processCode}` +
+                (payload.summary ? `: ${payload.summary}` : '') +
+                ` (requested by ${payload.requestedBy}).`,
+              schema: {
+                type: 'object',
+                properties: {
+                  decision: {
+                    type: 'string',
+                    enum: ['approve', 'reject'],
+                    title: 'Decision',
+                    description: 'Approve runs the process; reject cancels it.',
+                  },
+                  comment: {
+                    type: 'string',
+                    title: 'Comment (optional)',
+                    description: 'Recorded on the ticket with your decision.',
+                  },
+                },
+                required: ['decision'],
+              },
+            })
+          : null;
+        if (!elicited) {
+          // No interactive UI available — guide the text fallback.
+          return {
+            content: [
+              {
+                type: 'text',
+                text:
+                  `Decide **${input.ticketId}** (${payload.processCode}${payload.summary ? ` — ${payload.summary}` : ''}): ` +
+                  `re-run henri_approve with decision "approve" or "reject" (optionally a note).`,
+              },
+            ],
+          };
+        }
+        if (elicited.action !== 'accept') {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `No decision recorded for ${input.ticketId} — you ${elicited.action === 'decline' ? 'declined' : 'cancelled'} the prompt.`,
+              },
+            ],
+          };
+        }
+        const picked = elicited.content?.decision;
+        decision = picked === 'approve' ? 'approve' : picked === 'reject' ? 'reject' : undefined;
+        const comment = elicited.content?.comment;
+        note = typeof comment === 'string' && comment.trim() ? comment.trim() : undefined;
+        if (!decision) {
+          return {
+            content: [{ type: 'text', text: `No valid decision selected for ${input.ticketId}.` }],
+            isError: true,
+          };
+        }
+      }
+
+      if (decision === 'reject') {
         await this.client.updateIssue(input.ticketId, {
           status: 'cancelled',
-          comment: `⛔ Rejected by ${context.userEmail}${input.note ? `: ${input.note}` : ''}.`,
+          comment: `⛔ Rejected by ${context.userEmail}${note ? `: ${note}` : ''}.`,
         });
         await this.publishApproval(
           'backoffice.approval.decided',
@@ -738,7 +814,7 @@ export class PaperclipPlugin implements ServicePlugin {
       const runTicket = runId ? await this.resolveLinkedTicket(payload.routineId, runId) : null;
       await this.client.updateIssue(input.ticketId, {
         status: 'done',
-        comment: `✅ Approved by ${context.userEmail}${input.note ? `: ${input.note}` : ''}. Run started${runTicket ? ` → ${runTicket}` : ''}.`,
+        comment: `✅ Approved by ${context.userEmail}${note ? `: ${note}` : ''}. Run started${runTicket ? ` → ${runTicket}` : ''}.`,
       });
       await this.publishApproval(
         'backoffice.approval.decided',
