@@ -4,7 +4,54 @@ import {
   isSensitiveProcess,
   buildApprovalDescription,
   parseApprovalDescription,
+  summarizeRequest,
+  missingRequiredVariables,
 } from './index.js';
+
+describe('summarizeRequest', () => {
+  it('prefers the request param, then summary, then notes, then first param', () => {
+    expect(summarizeRequest({ request: 'Add a rule' }, 'ignored notes')).toBe('Add a rule');
+    expect(summarizeRequest({ summary: 'S' }, 'n')).toBe('S');
+    expect(summarizeRequest(undefined, 'from notes')).toBe('from notes');
+    expect(summarizeRequest({ foo: 'bar' }, undefined)).toBe('bar');
+  });
+  it('collapses whitespace and truncates long text', () => {
+    expect(summarizeRequest({ request: 'a\n  b   c' }, undefined)).toBe('a b c');
+    const long = 'x'.repeat(200);
+    const out = summarizeRequest({ request: long }, undefined);
+    expect(out.length).toBe(160);
+    expect(out.endsWith('…')).toBe(true);
+  });
+  it('returns empty string when nothing is provided', () => {
+    expect(summarizeRequest(undefined, undefined)).toBe('');
+    expect(summarizeRequest({}, '')).toBe('');
+  });
+});
+
+describe('missingRequiredVariables', () => {
+  const routine = (variables: unknown) => ({ variables });
+  it('flags a required variable with no value supplied', () => {
+    expect(missingRequiredVariables(routine([{ name: 'request', required: true }]), {})).toEqual([
+      'request',
+    ]);
+    expect(missingRequiredVariables(routine([{ name: 'request' }]), { request: '   ' })).toEqual([
+      'request',
+    ]); // default required=true, blank counts as missing
+  });
+  it('passes when the value is supplied', () => {
+    expect(missingRequiredVariables(routine([{ name: 'request' }]), { request: 'do X' })).toEqual(
+      [],
+    );
+  });
+  it('ignores optional variables and those with a default', () => {
+    expect(missingRequiredVariables(routine([{ name: 'x', required: false }]), {})).toEqual([]);
+    expect(missingRequiredVariables(routine([{ name: 'x', defaultValue: 'd' }]), {})).toEqual([]);
+  });
+  it('handles routines with no variables', () => {
+    expect(missingRequiredVariables(routine(undefined), {})).toEqual([]);
+    expect(missingRequiredVariables(routine([]), undefined)).toEqual([]);
+  });
+});
 
 describe('isSensitiveProcess', () => {
   it('flags titles starting with ! (incl. leading space)', () => {
