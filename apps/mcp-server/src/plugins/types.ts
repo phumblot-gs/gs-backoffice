@@ -27,6 +27,30 @@ export interface ToolContext {
   processes?: Record<string, { scope: string | null }>;
 }
 
+// --- Elicitation (interactive choice prompt) ---
+
+/** Result of an elicitation request (MCP `elicitation/create`). */
+export interface ElicitResult {
+  action: 'accept' | 'decline' | 'cancel';
+  content?: Record<string, unknown>;
+}
+
+/**
+ * Ask the connected client to render an interactive form (e.g. Approve/Reject buttons)
+ * and return the user's structured answer. `schema` is a flat JSON Schema (the MCP
+ * `requestedSchema`). Returns null when the client does NOT support elicitation (or the
+ * request fails) — callers MUST fall back to a text flow so nothing breaks.
+ */
+export type Elicit = (params: {
+  message: string;
+  schema: Record<string, unknown>;
+}) => Promise<ElicitResult | null>;
+
+/** Per-invocation capabilities passed to a tool (beyond its parsed input + context). */
+export interface ToolExtra {
+  elicit?: Elicit;
+}
+
 // --- Plugin tool definition ---
 
 export interface PluginTool {
@@ -41,7 +65,11 @@ export interface PluginTool {
    * events (e.g. backoffice.approval.requested) are published explicitly by plugins.
    */
   auditCategory: string | null;
-  execute(input: Record<string, unknown>, context: ToolContext): Promise<CallToolResult>;
+  execute(
+    input: Record<string, unknown>,
+    context: ToolContext,
+    extra?: ToolExtra,
+  ): Promise<CallToolResult>;
 }
 
 // --- Plugin initialization config ---
