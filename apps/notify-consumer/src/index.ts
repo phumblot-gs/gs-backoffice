@@ -68,9 +68,9 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
       if (!p.ticketId || !p.processCode) return null;
       // Use a card with a button: the <url|label> text syntax does not render
       // reliably for long encoded URLs, and a button is the documented approach.
-      const widgets: Record<string, unknown>[] = [
-        { textParagraph: { text: `Requested by <b>${p.requestedBy}</b>` } },
-      ];
+      const widgets: Record<string, unknown>[] = [];
+      if (p.summary) widgets.push({ textParagraph: { text: `<b>${p.summary}</b>` } });
+      widgets.push({ textParagraph: { text: `Requested by <b>${p.requestedBy}</b>` } });
       if (p.approveUrl) {
         widgets.push({
           buttonList: {
@@ -90,7 +90,12 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
             {
               cardId: `approval-${p.ticketId}`,
               card: {
-                header: { title: '🔒 Approval needed', subtitle: `Process: ${p.processCode}` },
+                header: {
+                  title: '🔒 Approval needed',
+                  subtitle: p.projectName
+                    ? `${p.projectName} · ${p.processCode}`
+                    : `Process: ${p.processCode}`,
+                },
                 sections: [{ widgets }],
               },
             },

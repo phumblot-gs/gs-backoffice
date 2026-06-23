@@ -69,6 +69,14 @@ export class PaperclipClient {
     return this.request('GET', `/companies/${companyId}/routines`);
   }
 
+  /** List a company's projects, tolerating array or { projects | data } envelopes. */
+  async listProjects(companyId: string): Promise<Array<Record<string, unknown>>> {
+    const raw = (await this.request('GET', `/companies/${companyId}/projects`)) as unknown;
+    if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>;
+    const env = raw as { projects?: unknown[]; data?: unknown[] };
+    return (env.projects ?? env.data ?? []) as Array<Record<string, unknown>>;
+  }
+
   /** Trigger a routine run. `variables` (string/number/boolean) and `payload`
    * map to the routine run contract; an idempotencyKey avoids duplicate runs. */
   async runRoutine(
