@@ -1,9 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ElicitResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import pino from 'pino';
 import type { EvtClient } from '@gs-backoffice/evt-client';
 import type { EvtActor, EvtScope } from '@gs-backoffice/core';
 import { createBackofficeEvent, AUDIT_TOOL_INVOKED } from '@gs-backoffice/core';
-import type { ServicePlugin, PluginTool, ToolContext, PluginInitConfig } from './types.js';
+import type { ServicePlugin, PluginTool, ToolContext, PluginInitConfig, Elicit } from './types.js';
 
 const logger = pino({ name: 'plugin-manager' });
 
@@ -49,9 +50,28 @@ export class PluginManager {
     const tools = this.getAuthorizedTools(context.permissions);
 
     for (const tool of tools) {
-      server.tool(tool.name, tool.description, tool.schema.shape, async (input) => {
+      server.tool(tool.name, tool.description, tool.schema.shape, async (input, sdkExtra) => {
         const parsed = tool.schema.parse(input);
-        const result = await tool.execute(parsed as Record<string, unknown>, context);
+        // Elicitation handle: ask the client to render an interactive form. Returns null
+        // if the client didn't advertise the `elicitation` capability (or the request
+        // fails) — the tool then falls back to a text flow. Never throws.
+        const elicit: Elicit = async ({ message, schema }) => {
+          try {
+            const request = {
+              method: 'elicitation/create',
+              params: { message, requestedSchema: schema },
+            } as Parameters<typeof sdkExtra.sendRequest>[0];
+            const res = await sdkExtra.sendRequest(request, ElicitResultSchema);
+            return { action: res.action, content: res.content };
+          } catch (err) {
+            logger.info(
+              { tool: tool.name, error: err instanceof Error ? err.message : String(err) },
+              'Elicitation unavailable — falling back to text flow',
+            );
+            return null;
+          }
+        };
+        const result = await tool.execute(parsed as Record<string, unknown>, context, { elicit });
 
         if (tool.auditCategory) {
           const actor: EvtActor = {
