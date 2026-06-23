@@ -103,11 +103,31 @@ if (!moAgentId) {
   console.log(`Resolved Methods Officer: ${mo.name ?? mo.role} (${moAgentId})`);
 }
 
+// 2b. Resolve the gs-backoffice project so the routine is filed under it (Paperclip
+// convention: routines belong to a project). Optional — skip association if not found.
+let projectId = null;
+try {
+  const projectsRaw = await api('GET', `/companies/${companyId}/projects`);
+  const projects = Array.isArray(projectsRaw)
+    ? projectsRaw
+    : (projectsRaw.projects ?? projectsRaw.data ?? []);
+  const proj = projects.find((p) => String(p.name ?? '').toLowerCase() === 'gs-backoffice');
+  if (proj) {
+    projectId = String(proj.id);
+    console.log(`Resolved project: gs-backoffice (${projectId})`);
+  } else {
+    console.warn('Project "gs-backoffice" not found — creating the routine without a project.');
+  }
+} catch (err) {
+  console.warn(`Could not resolve projects (${String(err)}) — creating without a project.`);
+}
+
 // 3. Create the sensitive, leadership-reserved routine.
 const created = await api('POST', `/companies/${companyId}/routines`, {
   title: TITLE,
   description: DESCRIPTION,
   assigneeAgentId: moAgentId,
+  ...(projectId ? { projectId } : {}),
   priority: 'high',
   status: 'active',
   variables: [

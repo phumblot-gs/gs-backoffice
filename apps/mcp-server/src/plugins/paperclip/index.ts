@@ -52,6 +52,54 @@ interface ApprovalPayload {
   requestedBy: string;
   parameters?: Record<string, string>;
   notes?: string;
+  /** Short, human-readable "what is this about" (few words) — shown in Chat + review. */
+  summary?: string;
+  /** Name of the Paperclip project the routine belongs to (shown in Chat + review). */
+  projectName?: string;
+}
+
+/**
+ * A short, single-line "what is this about" for an approval — the requester's intent.
+ * Prefers an explicit `request`/`summary` parameter, then free-text notes, then the
+ * first parameter value. Truncated for Chat cards and the approver's review.
+ */
+export function summarizeRequest(
+  parameters: Record<string, string> | undefined,
+  notes: string | undefined,
+): string {
+  const fromParams =
+    parameters && (parameters.request ?? parameters.summary ?? Object.values(parameters)[0]);
+  const oneLine = String(fromParams || notes || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return oneLine.length > 160 ? `${oneLine.slice(0, 159)}…` : oneLine;
+}
+
+/**
+ * Names of a routine's REQUIRED variables that the caller did not supply. Paperclip only
+ * enforces required variables at run time — which, for a sensitive process, is AFTER
+ * approval — so a missing variable would otherwise blow up in the approver's face. We
+ * validate at request time instead. Works for any routine, so new sensitive routines
+ * can't reintroduce this class of bug.
+ */
+export function missingRequiredVariables(
+  routine: Record<string, unknown>,
+  parameters: Record<string, string> | undefined,
+): string[] {
+  const vars = Array.isArray(routine.variables)
+    ? (routine.variables as Array<Record<string, unknown>>)
+    : [];
+  const provided = parameters ?? {};
+  return vars
+    .filter((v) => {
+      const name = typeof v.name === 'string' ? v.name : '';
+      if (!name) return false;
+      const required = v.required !== false; // schema default is true
+      const hasDefault = v.defaultValue != null && String(v.defaultValue).trim() !== '';
+      const supplied = name in provided && String(provided[name] ?? '').trim() !== '';
+      return required && !hasDefault && !supplied;
+    })
+    .map((v) => String(v.name));
 }
 
 export function buildApprovalDescription(p: ApprovalPayload): string {
@@ -59,6 +107,8 @@ export function buildApprovalDescription(p: ApprovalPayload): string {
     `**Sensitive process awaiting approval.**`,
     ``,
     `- Process: \`${p.processCode}\``,
+    p.projectName ? `- Project: ${p.projectName}` : null,
+    p.summary ? `- Summary: ${p.summary}` : null,
     `- Requested by: ${p.requestedBy}`,
     `- Approval scope: ${p.scope ?? 'leadership (no scope declared)'}`,
     p.parameters && Object.keys(p.parameters).length
@@ -106,6 +156,8 @@ export class PaperclipPlugin implements ServicePlugin {
   private evtClient: EvtClient | null = null;
   private evtAccountId = '';
   private environment: 'development' | 'staging' | 'production' = 'development';
+  /** Lazily-built projectId → name map (for enriching approval cards/reviews). */
+  private projectNames?: Map<string, string>;
 
   async initialize(config: PluginInitConfig): Promise<void> {
     this.logger = config.logger;
@@ -390,6 +442,22 @@ export class PaperclipPlugin implements ServicePlugin {
         };
       }
 
+      // Validate required variables NOW (request time), not at run time. Paperclip only
+      // enforces them when the routine runs — for a sensitive process that is after
+      // approval, so a missing variable would otherwise fail in the approver's face.
+      const missing = missingRequiredVariables(match, input.parameters);
+      if (missing.length > 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Process "${code}" requires parameter(s): ${missing.join(', ')}. Re-run henri_start_workflow with them, e.g. parameters: { ${missing.map((m) => `"${m}": "…"`).join(', ')} }.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // Approval gate (2b): a sensitive process (routine title starts with `!`) is
       // NOT run on request — create an approval ticket and wait for an authorized
       // approver (≠ requester) to run henri_approve.
@@ -495,6 +563,25 @@ export class PaperclipPlugin implements ServicePlugin {
     }
   }
 
+  /** Resolve a routine's project name (cached); '' if none/unknown. Never throws. */
+  private async resolveProjectName(projectId: unknown): Promise<string> {
+    if (typeof projectId !== 'string' || !projectId) return '';
+    try {
+      if (!this.projectNames) {
+        const projects = await this.client.listProjects(this.companyId);
+        this.projectNames = new Map(
+          projects
+            .filter((p) => typeof p.id === 'string' && typeof p.name === 'string')
+            .map((p) => [String(p.id), String(p.name)]),
+        );
+      }
+      return this.projectNames.get(projectId) ?? '';
+    } catch (err) {
+      this.logger.warn({ error: err, projectId }, 'Failed to resolve project name (non-fatal)');
+      return '';
+    }
+  }
+
   /** Create the approval-request ticket for a sensitive process (does NOT run it). */
   private async createApprovalRequest(
     match: Record<string, unknown>,
@@ -503,6 +590,8 @@ export class PaperclipPlugin implements ServicePlugin {
     context: ToolContext,
   ): Promise<CallToolResult> {
     const scope = this.processScope(code, context);
+    const summary = summarizeRequest(input.parameters, input.notes);
+    const projectName = await this.resolveProjectName(match.projectId);
     const payload: ApprovalPayload = {
       kind: APPROVAL_MARKER,
       routineId: String(match.id),
@@ -511,6 +600,8 @@ export class PaperclipPlugin implements ServicePlugin {
       requestedBy: context.userEmail,
       parameters: input.parameters,
       notes: input.notes,
+      summary: summary || undefined,
+      projectName: projectName || undefined,
     };
     const issue = await this.client.createIssue({
       companyId: this.companyId,
@@ -527,6 +618,8 @@ export class PaperclipPlugin implements ServicePlugin {
         processCode: code,
         scope,
         requestedBy: context.userEmail,
+        summary: summary || undefined,
+        projectName: projectName || undefined,
         approveUrl: this.approvalDeepLink(ticketId, code),
       },
       context,
@@ -638,6 +731,7 @@ export class PaperclipPlugin implements ServicePlugin {
           approvedBy: context.userEmail,
           processCode: payload.processCode,
           approvalTicket: input.ticketId,
+          notes: payload.notes,
         },
       });
       const runId = String(run.id ?? run.runId ?? '');
@@ -719,10 +813,12 @@ export class PaperclipPlugin implements ServicePlugin {
           content: [{ type: 'text', text: 'No approval requests are awaiting your decision.' }],
         };
       }
-      const lines = pending.map(
-        ({ i, p }) =>
-          `- **${String(i.identifier ?? i.shortId ?? i.id)}** — \`${p!.processCode}\` (scope: ${p!.scope ?? 'leadership'}), requested by ${p!.requestedBy}`,
-      );
+      const lines = pending.map(({ i, p }) => {
+        const id = String(i.identifier ?? i.shortId ?? i.id);
+        const proj = p!.projectName ? ` · ${p!.projectName}` : '';
+        const sum = p!.summary ? ` — _${p!.summary}_` : '';
+        return `- **${id}** — \`${p!.processCode}\`${proj} (scope: ${p!.scope ?? 'leadership'}), requested by ${p!.requestedBy}${sum}`;
+      });
       return {
         content: [
           {
@@ -748,6 +844,12 @@ export class PaperclipPlugin implements ServicePlugin {
   private async executeTicketStatus(input: { ticketId: string }): Promise<CallToolResult> {
     try {
       const issue = await this.client.getIssue(input.ticketId);
+      // If this is a sensitive-process approval request, surface WHAT is being decided
+      // (process, project, summary, parameters) so an approver landing here from the
+      // Google Chat link sees the request — not just opaque status fields.
+      const approval = parseApprovalDescription(
+        typeof issue.description === 'string' ? issue.description : null,
+      );
       return {
         content: [
           {
@@ -761,6 +863,18 @@ export class PaperclipPlugin implements ServicePlugin {
                 assignee: issue.assigneeAgentId,
                 createdAt: issue.createdAt,
                 updatedAt: issue.updatedAt,
+                ...(approval
+                  ? {
+                      approvalRequest: {
+                        process: approval.processCode,
+                        project: approval.projectName ?? null,
+                        summary: approval.summary ?? null,
+                        requestedBy: approval.requestedBy,
+                        approvalScope: approval.scope ?? 'leadership',
+                        parameters: approval.parameters ?? {},
+                      },
+                    }
+                  : {}),
               },
               null,
               2,
