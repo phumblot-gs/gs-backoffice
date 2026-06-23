@@ -77,7 +77,12 @@ if (MODE === 'ensure') {
       body: JSON.stringify({
         name: QUEUE_NAME,
         filters: { eventTypes: EVENT_TYPES },
-        config: { maxMessages: 10, waitTimeSeconds: 20, visibilityTimeout: 60, retentionPeriod: 604800 },
+        config: {
+          maxMessages: 10,
+          waitTimeSeconds: 20,
+          visibilityTimeout: 60,
+          retentionPeriod: 604800,
+        },
       }),
     }));
   console.log(`Queue "${QUEUE_NAME}" ready (status: ${queue.status ?? '?'}).`);
@@ -159,7 +164,8 @@ while (emptyRounds < 3) {
     rows.push(e);
     handles.push(m.receiptHandle);
   }
-  if (handles.length) await api(messagesUrl, { method: 'DELETE', body: JSON.stringify({ receiptHandles: handles }) });
+  if (handles.length)
+    await api(messagesUrl, { method: 'DELETE', body: JSON.stringify({ receiptHandles: handles }) });
 }
 
 console.log(`Drained ${rows.length} audit/evolution event(s) from "${QUEUE_NAME}".\n`);
