@@ -171,6 +171,26 @@ jobs:
     if: always()
 
     steps:
+      - name: Checkout
+        if: needs.deploy.result == 'success'
+        uses: actions/checkout@v4
+
+      # Audit (SOC2): record every successful staging deploy in the backoffice trail
+      # (correlates with backoffice.evolution.merged by sha). Best-effort; never fails CI.
+      - name: Emit backoffice.deploy.completed
+        if: needs.deploy.result == 'success'
+        env:
+          EVT_API_URL: ${{ secrets.EVT_API_URL }}
+          EVT_API_KEY: ${{ secrets.EVT_API_KEY }}
+          EVT_ACCOUNT_ID: ${{ secrets.EVT_ACCOUNT_ID }}
+          EVT_EVENT_TYPE: backoffice.deploy.completed
+          EVT_RESOURCE_TYPE: deployment
+          EVT_RESOURCE_ID: ${{ github.sha }}
+          EVT_ACTOR: ${{ github.actor }}
+          EVT_ENVIRONMENT: staging
+          EVT_PAYLOAD: '{"environment":"staging","sha":"${{ github.sha }}","ref":"${{ github.ref_name }}","runId":"${{ github.run_id }}","actor":"${{ github.actor }}"}'
+        run: node scripts/emit-evt.mjs
+
       - name: Deployment Status
         run: |
           if [ "${{ needs.deploy.result }}" == "success" ]; then
