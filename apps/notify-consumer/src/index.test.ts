@@ -54,7 +54,7 @@ describe('renderMessage', () => {
       eventType: 'backoffice.approval.requested',
       payload: {
         scope: 'finance',
-        ticketId: 'GRA-9',
+        approvalId: 'appr-123',
         processCode: 'pay-supplier',
         requestedBy: 'alice@grand-shooting.com',
         approveUrl: 'https://claude.ai/new?q=...',
@@ -62,7 +62,7 @@ describe('renderMessage', () => {
     };
     const m = renderMessage(e);
     expect(m?.scope).toBe('finance');
-    // Rendered as a card with a "Review GRA-9" button that opens the deep-link.
+    // Rendered as a card with a "Review & decide" button that opens the deep-link.
     const card = (m?.body.cardsV2 as Array<{ card: Record<string, unknown> }>)[0].card as {
       header: { subtitle: string };
       sections: Array<{ widgets: Array<Record<string, unknown>> }>;
@@ -73,7 +73,7 @@ describe('renderMessage', () => {
         buttons: Array<{ text: string; onClick: { openLink: { url: string } } }>;
       }
     ).buttons[0];
-    expect(button.text).toBe('Review GRA-9');
+    expect(button.text).toBe('Review & decide');
     expect(button.onClick.openLink.url).toBe('https://claude.ai/new?q=...');
   });
 
@@ -101,7 +101,7 @@ describe('renderMessage', () => {
       ...base,
       eventType: 'backoffice.approval.decided',
       payload: {
-        ticketId: 'GRA-9',
+        approvalId: 'appr-123',
         processCode: 'pay-supplier',
         decision: 'approved',
         approver: 'bob@grand-shooting.com',
