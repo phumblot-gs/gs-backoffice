@@ -84,6 +84,12 @@ variable "paperclip_public_url" {
   type        = string
 }
 
+variable "backoffice_repo_url" {
+  description = "Repo the self-evolution bridge operates on when the agent omits repoUrl (not a secret)."
+  type        = string
+  default     = "https://github.com/phumblot-gs/gs-backoffice.git"
+}
+
 variable "mcp_cpu" {
   description = "CPU units for MCP server task"
   type        = number

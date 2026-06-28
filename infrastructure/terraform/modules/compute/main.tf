@@ -150,6 +150,10 @@ resource "aws_ecs_task_definition" "paperclip" {
       { name = "PAPERCLIP_TELEMETRY_DISABLED", value = "1" },
       { name = "PAPERCLIP_ALLOWED_HOSTNAMES", value = var.paperclip_allowed_hostnames },
       { name = "PAPERCLIP_PUBLIC_URL", value = var.paperclip_public_url },
+      # Repo the self-evolution bridge operates on, when the agent omits repoUrl. Read by
+      # the bridge as a fallback — NOT bound to a Paperclip workspace, which would make the
+      # host attempt a git clone each run (we keep all code execution in the Fly sandbox).
+      { name = "BACKOFFICE_REPO_URL", value = var.backoffice_repo_url },
     ]
     secrets = [
       {
