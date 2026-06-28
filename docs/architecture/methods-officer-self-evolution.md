@@ -84,31 +84,31 @@ The loop is wired through EVT events: each step emits one, the audit trail recor
 - **Business events** are published **explicitly** by the emitting plugin/agent under `backoffice.<domain>.<action>` types, with a rich, purpose-built payload.
 - **Consumers subscribe by type** through a server-side-filtered EVT queue (the `notify-consumer` pattern), so audit noise never reaches a business consumer, and no event is missed regardless of the shared product-stream volume.
 
-**Emitted today.**
+`actor` = `{userId, accountId, role}` and `scope` = `{accountId, resourceType, resourceId}` on every event. The `notify-consumer` queue filters on the human-facing types only.
 
-| Event type                      | Kind     | Payload (key fields)                                                         | Emitter                                                       |
-| ------------------------------- | -------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `backoffice.audit.tool_invoked` | audit    | `{tool, category, input, isError, userEmail}`                                | PluginManager, for any tool with an `auditCategory`           |
-| `backoffice.approval.requested` | business | `{ticketId, processCode, scope, requestedBy, approveUrl}`                    | approval gate (`henri_start_workflow` on a sensitive process) |
-| `backoffice.approval.decided`   | business | `{ticketId, processCode, scope, decision, approver, requestedBy, runTicket}` | approval gate (`henri_approve`)                               |
+**Implemented (as of 2026-06-28, validated end-to-end).** The full event taxonomy, payloads,
+and **durability model** (which store is authoritative — EVT / CloudWatch / bridge run-log /
+Paperclip `activity_log`) live in **[audit-trail.md](./audit-trail.md)** — the single source of
+truth. Summary of what the loop emits:
 
-`actor` = `{userId, accountId, role}` and `scope` = `{accountId, resourceType, resourceId}` on every event. The `notify-consumer` queue (`backoffice-notify`) filters on the business types only.
+- `backoffice.audit.tool_invoked` — every tool call, **employee (MCP) and agent (bridge)**.
+- `backoffice.approval.requested` / `.decided` — the native approval gate (`henri_start_workflow`
+  sensitive → `henri_review_approval` / `henri_approve`). Payload keys on `approvalId` (native
+  Paperclip approvals, not the old description-marker ticket).
+- `backoffice.evolution.plan_proposed` / `.plan_accepted` — CEO-side gate (MCP, on the approval).
+- `backoffice.evolution.step_created` / `.pr_opened` / `.completed` / `.escalated` — the bridge,
+  as the Methods Officer drives the Engineer loop.
+- `backoffice.evolution.merged` (CI, on an evolution PR merge — records the human merger) and
+  `backoffice.deploy.completed` (CI, on a staging deploy — correlate by `sha`). These close the
+  go-live audit gap (G2).
 
-**To add for the self-evolution loop** (business events, published explicitly; the notify-consumer subscribes to the human-facing ones and routes by `payload.scope`). `<id>` = evolution issue id; `scope` routes Chat to the requester/team.
+**Not implemented** (the earlier aspirational set — `plan_ready`, `audit_completed`,
+`recette_*`, `ready_for_production`): the loop currently relies on the gates above + the human
+PR merge; revisit if/when a formal recette/release-registry step is added.
 
-| Event type                                                | Step / gate | Payload (key fields)                                             | → Chat                          |
-| --------------------------------------------------------- | ----------- | ---------------------------------------------------------------- | ------------------------------- |
-| `backoffice.evolution.requested`                          | 1 intake    | `{evolutionId, requestedBy, title}`                              | —                               |
-| `backoffice.evolution.plan_ready`                         | 2 → Gate 1  | `{evolutionId, criticality, planRevisionId}`                     | CEO                             |
-| `backoffice.evolution.plan_accepted` / `.plan_rejected`   | Gate 1      | `{evolutionId, decidedBy, reason?}`                              | requester                       |
-| `backoffice.evolution.audit_completed`                    | Gate 2      | `{evolutionId, verdict, criteriaMet, sincere, reportUrl}`        | CEO                             |
-| `backoffice.evolution.pr_ready`                           | Gate 3      | `{evolutionId, requestedBy, prUrl, evidenceUrl, auditReportUrl}` | requester                       |
-| `backoffice.evolution.merged` / `.merge_rejected`         | Gate 3      | `{evolutionId, by, prUrl, reason?}`                              | requester + Methods Officer     |
-| `backoffice.evolution.recette_passed` / `.recette_failed` | Gate 4      | `{evolutionId, verifiedBy, details}`                             | CEO (+ Methods Officer on fail) |
-| `backoffice.evolution.ready_for_production`               | 10 registry | `{evolutionId, shortDescription, project}`                       | CEO                             |
-| `backoffice.evolution.deployed`                           | 11 release  | `{evolutionId, project, includedEvolutionIds}`                   | requester + CEO                 |
-
-New business types are added to `BACKOFFICE_EVENT_TYPES` in `packages/core`, to the notify-consumer's `SUBSCRIBED_EVENT_TYPES`, and to the `backoffice-notify` queue filter; rendering for each is added to the consumer's `renderMessage`.
+New business types are added to `BACKOFFICE_EVENT_TYPES` in `packages/core`, to the
+notify-consumer's `SUBSCRIBED_EVENT_TYPES` + queue filter (only if Chat-facing), and a renderer
+in `renderMessage`.
 
 ## 7. Production-ready release registry & independent deployment
 
