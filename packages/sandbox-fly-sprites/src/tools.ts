@@ -309,7 +309,11 @@ export function registerSandboxTools(ctx: PluginContext): void {
             type: 'string',
             description: 'Instruction for Claude (it edits files; the tool commits + pushes).',
           },
-          model: { type: 'string', description: 'Optional Claude model for the in-sandbox run.' },
+          model: {
+            type: 'string',
+            description:
+              'Claude model for the in-sandbox coding run. Defaults to Sonnet; pass a Haiku model for trivial edits to save cost.',
+          },
           timeoutMs: {
             type: 'number',
             description: 'Hard wall-clock limit (ms; host caps at 15min).',

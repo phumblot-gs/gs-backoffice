@@ -7,6 +7,13 @@ import { shellQuote } from './shell.js';
 export const SANDBOX_WORK_DIR = '/home/sprite/work';
 
 /**
+ * Default model for the in-sandbox coding run when the caller passes none. We pin Sonnet
+ * for cost (the CLI default may be Opus). The orchestrator can override per task: a smaller
+ * model (Haiku) for trivial edits, or a larger one for genuinely hard changes.
+ */
+export const DEFAULT_CODE_MODEL = 'claude-sonnet-4-6';
+
+/**
  * Shell to configure git auth + identity. The token is read from `$GH_TOKEN` at
  * call time via a credential helper, so it is never written to `.git/config` or a
  * remote URL. Pure (testable); the caller passes `$GH_TOKEN` in the command env.
@@ -250,7 +257,7 @@ export async function sandboxCodeTask(
     '--permission-mode',
     'acceptEdits',
   ];
-  if (input.model) claudeArgs.push('--model', input.model);
+  claudeArgs.push('--model', input.model || DEFAULT_CODE_MODEL);
   const claudeCmd = `cd ${shellQuote(workDir)} && claude ${claudeArgs.map(shellQuote).join(' ')} 2>&1`;
   const claude = await execReliable(sprite, {
     command: 'sh',

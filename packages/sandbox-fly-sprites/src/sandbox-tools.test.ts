@@ -4,6 +4,7 @@ import {
   buildCheckoutScript,
   buildCodeTaskCheckoutScript,
   buildFormatScript,
+  DEFAULT_CODE_MODEL,
   SANDBOX_WORK_DIR,
 } from './sandbox.js';
 import {
@@ -108,6 +109,12 @@ describe('buildCodeTaskCheckoutScript', () => {
     expect(s).toContain('git checkout -B "$TB" "origin/$TB"');
     expect(s).toContain('git checkout -B "$TB" "origin/$BB"'); // else from base
     expect(s).toContain('credential.helper');
+  });
+});
+
+describe('DEFAULT_CODE_MODEL', () => {
+  it('pins the in-sandbox coding default to Sonnet (cost), not the CLI default', () => {
+    expect(DEFAULT_CODE_MODEL).toBe('claude-sonnet-4-6');
   });
 });
 
