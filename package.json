@@ -9,6 +9,7 @@
     "lint": "turbo run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "verify": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
     "dev": "turbo run dev --parallel",
     "clean": "turbo run clean"
   },

@@ -154,6 +154,23 @@ export function buildCodeTaskCheckoutScript(input: {
   ].join('\n');
 }
 
+/**
+ * Best-effort formatting pass, run after Claude edits and BEFORE the commit, so pushed
+ * branches are always prettier-clean and never fail CI's `format:check` step (the
+ * recurring loop failure). Uses the repo's OWN prettier (CI parity) via corepack+pnpm.
+ * Every step is `|| true` so an install/format hiccup never blocks the task — worst case
+ * the commit is unformatted, exactly as before this step existed. Pure (testable).
+ */
+export function buildFormatScript(workDir: string): string {
+  const work = shellQuote(workDir);
+  return [
+    `cd ${work} || exit 0`,
+    `corepack enable >/dev/null 2>&1 || true`,
+    `pnpm install --prefer-offline --silent >/dev/null 2>&1 || true`,
+    `pnpm format >/dev/null 2>&1 || pnpm exec prettier --write . >/dev/null 2>&1 || true`,
+  ].join('\n');
+}
+
 export interface SandboxCodeTaskInput {
   repoUrl: string;
   baseBranch: string;
@@ -251,6 +268,16 @@ export async function sandboxCodeTask(
   } catch {
     summary = claude.stdout.slice(-400);
   }
+
+  // B3: deterministic format pass before the commit, so the pushed branch is always
+  // prettier-clean (CI `format:check` parity). Best-effort — its outcome is ignored, so
+  // an install/format hiccup never blocks the task.
+  await execReliable(sprite, {
+    command: 'sh',
+    args: ['-c', buildFormatScript(workDir)],
+    timeoutMs: 240_000,
+    id: randomUUID(),
+  });
 
   // Commit + push from the sandbox.
   const commitMsg = `sandbox: ${input.task.slice(0, 60).replace(/\s+/g, ' ')}`;
