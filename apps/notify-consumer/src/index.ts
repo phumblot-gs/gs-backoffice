@@ -65,7 +65,7 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
   switch (event.eventType) {
     case 'backoffice.approval.requested': {
       // Skip the PluginManager audit event (same type, no business payload).
-      if (!p.ticketId || !p.processCode) return null;
+      if (!p.approvalId || !p.processCode) return null;
       // Use a card with a button: the <url|label> text syntax does not render
       // reliably for long encoded URLs, and a button is the documented approach.
       const widgets: Record<string, unknown>[] = [];
@@ -76,7 +76,7 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
           buttonList: {
             buttons: [
               {
-                text: `Review ${p.ticketId}`,
+                text: 'Review & decide',
                 onClick: { openLink: { url: String(p.approveUrl) } },
               },
             ],
@@ -88,7 +88,7 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
         body: {
           cardsV2: [
             {
-              cardId: `approval-${p.ticketId}`,
+              cardId: `approval-${p.approvalId}`,
               card: {
                 header: {
                   title: '🔒 Approval needed',
@@ -106,13 +106,13 @@ export function renderMessage(event: EvtEvent): RenderedMessage | null {
     case 'backoffice.approval.decided': {
       // Skip the PluginManager audit event (same type, no business payload) — this is
       // what produced the "Approval undefined (undefined) …" artifact.
-      if (!p.ticketId || !p.decision) return null;
+      if (!p.approvalId || !p.decision) return null;
       const icon = p.decision === 'approved' ? '✅' : '⛔';
       return {
         scope: (p.scope as string) ?? null,
         body: {
           text:
-            `${icon} Approval *${p.ticketId}* (\`${p.processCode}\`) ${p.decision} by ${p.approver}.` +
+            `${icon} Approval (\`${p.processCode}\`) ${p.decision} by ${p.approver}.` +
             (p.runTicket ? ` Running as ${p.runTicket}.` : ''),
         },
       };

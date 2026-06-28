@@ -2,8 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   extractWorkflowCode,
   isSensitiveProcess,
-  buildApprovalDescription,
-  parseApprovalDescription,
   summarizeRequest,
   missingRequiredVariables,
 } from './index.js';
@@ -62,28 +60,6 @@ describe('isSensitiveProcess', () => {
     expect(isSensitiveProcess('Register a contract (register-contract)')).toBe(false);
     expect(isSensitiveProcess(null)).toBe(false);
     expect(isSensitiveProcess(undefined)).toBe(false);
-  });
-});
-
-describe('approval description round-trip', () => {
-  it('builds a human description with an embedded machine-readable block, and parses it back', () => {
-    const payload = {
-      kind: 'gs-approval-request' as const,
-      routineId: 'rt_123',
-      processCode: 'pay-supplier',
-      scope: 'finance' as string | null,
-      requestedBy: 'alice@grand-shooting.com',
-      parameters: { amount: '1000' },
-    };
-    const desc = buildApprovalDescription(payload);
-    expect(desc).toContain('pay-supplier');
-    expect(parseApprovalDescription(desc)).toEqual(payload);
-  });
-
-  it('returns null for a non-approval description', () => {
-    expect(parseApprovalDescription('just a regular ticket')).toBeNull();
-    expect(parseApprovalDescription(null)).toBeNull();
-    expect(parseApprovalDescription('```json\n{"kind":"other"}\n```')).toBeNull();
   });
 });
 

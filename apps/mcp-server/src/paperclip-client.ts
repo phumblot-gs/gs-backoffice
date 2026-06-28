@@ -77,6 +77,62 @@ export class PaperclipClient {
     return (env.projects ?? env.data ?? []) as Array<Record<string, unknown>>;
   }
 
+  // --- Native approvals (Paperclip's first-class approval entity) -----------------
+  // Replaces the homegrown "JSON marker in the issue description" hack: state lives in
+  // the native `status` and metadata in the native `payload` (no truncation/reformatting).
+  // Endpoints (Paperclip 2026.609.0): POST /companies/:id/approvals, GET /approvals/:id,
+  // GET /companies/:id/approvals?status=, POST /approvals/:id/{approve,reject}, /comments.
+
+  /** Create a native approval. `payload` is free-form JSON (our metadata). Returns the approval. */
+  async createApproval(
+    companyId: string,
+    body: {
+      type: string;
+      payload: Record<string, unknown>;
+      requestedByAgentId?: string | null;
+      issueIds?: string[];
+    },
+  ): Promise<Record<string, unknown>> {
+    return this.request('POST', `/companies/${companyId}/approvals`, body);
+  }
+
+  /** Fetch one approval by id, or null if it does not exist. */
+  async getApproval(id: string): Promise<Record<string, unknown> | null> {
+    try {
+      return await this.request('GET', `/approvals/${id}`);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('failed: 404')) return null;
+      throw err;
+    }
+  }
+
+  /** List a company's approvals (optionally by status), tolerating array/{approvals|data}. */
+  async listApprovals(companyId: string, status?: string): Promise<Array<Record<string, unknown>>> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    const raw = (await this.request('GET', `/companies/${companyId}/approvals${q}`)) as unknown;
+    if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>;
+    const env = raw as { approvals?: unknown[]; data?: unknown[] };
+    return (env.approvals ?? env.data ?? []) as Array<Record<string, unknown>>;
+  }
+
+  /** Resolve an approval — `decision` selects the endpoint (/approve or /reject). Board only. */
+  async resolveApproval(
+    id: string,
+    decision: 'approve' | 'reject',
+    decisionNote?: string,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      'POST',
+      `/approvals/${id}/${decision}`,
+      decisionNote ? { decisionNote } : {},
+    );
+  }
+
+  /** Add a comment to an approval (audit/discussion trail). */
+  async addApprovalComment(id: string, body: string): Promise<Record<string, unknown>> {
+    return this.request('POST', `/approvals/${id}/comments`, { body });
+  }
+
   /** Trigger a routine run. `variables` (string/number/boolean) and `payload`
    * map to the routine run contract; an idempotencyKey avoids duplicate runs. */
   async runRoutine(
