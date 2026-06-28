@@ -20,7 +20,10 @@ export const SUBSCRIBED_EVENT_TYPES = [
 /**
  * Webhook routing map (one Google Chat channel per scope), supplied as a JSON
  * object in the GOOGLE_CHAT_WEBHOOKS secret, e.g.
- *   {"general":"https://chat.googleapis.com/...","finance":"https://chat.googleapis.com/..."}
+ *   {"general":"https://chat.googleapis.com/...","leadership":"https://chat.googleapis.com/...","finance":"https://chat.googleapis.com/..."}
+ * Routing is data-driven: any scope is looked up by name (lowercased), falling back to
+ * `general`. The budget plugin (GRA-42) publishes scope `leadership` → add a `leadership`
+ * key to this secret to route Henri budget alerts to the Leadership channel.
  * Editing this one secret value adds/changes channels — no task-def change needed.
  */
 export function parseWebhooks(raw: string | undefined): Record<string, string> {
