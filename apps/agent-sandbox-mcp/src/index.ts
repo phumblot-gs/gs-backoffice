@@ -121,7 +121,12 @@ export function createServer(): McpServer {
       task: z
         .string()
         .describe('Instruction for Claude (it edits files; the tool commits + pushes).'),
-      model: z.string().optional().describe('Optional Claude model for the in-sandbox run.'),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          'Claude model for the in-sandbox coding run. Defaults to Sonnet (good for real coding); pass a Haiku model for trivial edits to save cost.',
+        ),
       timeoutMs: z.number().optional().describe('Hard wall-clock limit (ms; host caps at 15min).'),
     },
     (args) => withAudit('sandbox_code_task', 'sandbox', () => call('sandbox_code_task', args)),
