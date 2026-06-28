@@ -23,12 +23,22 @@ COPY . .
 RUN pnpm install --frozen-lockfile \
   && pnpm --filter @gs-backoffice/core --filter @gs-backoffice/evt-client build \
   && pnpm --filter @gs-backoffice/sandbox-fly-sprites \
+          --filter @gs-backoffice/budget-plugin \
           --filter @gs-backoffice/agent-sandbox-mcp build
 # Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
 RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
   && cp -r packages/sandbox-fly-sprites/dist /opt/gs-plugins/plugin-fly-sprites/dist \
   && node -e "const p=require('/repo/packages/sandbox-fly-sprites/package.json'); require('fs').writeFileSync('/opt/gs-plugins/plugin-fly-sprites/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,paperclipPlugin:p.paperclipPlugin,dependencies:p.dependencies}, null, 2))" \
   && cd /opt/gs-plugins/plugin-fly-sprites \
+  && npm install --omit=dev --no-package-lock
+# Standalone bundle for the Henri budget plugin (built dist + manifest + its single
+# prod dep @paperclipai/plugin-sdk). EVT creds (EVT_API_URL/EVT_API_KEY/EVT_ACCOUNT_ID)
+# reach this worker via the same ADAPTER_ENV_PASSTHROUGH patch as the sandbox plugin,
+# gated on the `agent.tools.register` capability this plugin declares — no new env names.
+RUN mkdir -p /opt/gs-plugins/plugin-budget \
+  && cp -r packages/budget-plugin/dist /opt/gs-plugins/plugin-budget/dist \
+  && node -e "const p=require('/repo/packages/budget-plugin/package.json'); require('fs').writeFileSync('/opt/gs-plugins/plugin-budget/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,paperclipPlugin:p.paperclipPlugin,dependencies:p.dependencies}, null, 2))" \
+  && cd /opt/gs-plugins/plugin-budget \
   && npm install --omit=dev --no-package-lock
 # Standalone bundle for the agent-facing sandbox MCP server (stdio). NOT a Paperclip
 # plugin — the agent's `claude` process launches it via --mcp-config; it proxies tool
