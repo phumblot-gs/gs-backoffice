@@ -1,85 +1,27 @@
 import { definePlugin } from '@paperclipai/plugin-sdk';
-import type { ToolResult } from '@paperclipai/plugin-sdk';
 import { BudgetApiClient, readBudgetApiConfig } from './budget-api.js';
 import { buildAlertMessage, collectAlerts, diffAlerts, type NotifiedState } from './alerts.js';
 import { emitLeadershipChatNotify } from './notify.js';
 import { buildSnapshotPayload } from './snapshot.js';
 import { emitBudgetSnapshot } from './snapshot-emit.js';
 
-/** Stub tool result this step — real logic lands in GRA-42 Steps 2–4. */
-const notImplemented = (tool: string, step: string): ToolResult => ({
-  error: `${tool} is not implemented yet (GRA-42 ${step}).`,
-});
-
 /**
- * Henri budget plugin — registers three budget tools and two cron jobs.
- * Tool handlers and job bodies are stubs this step (GRA-42 Step 1): they compile
- * and load so the plugin can be baked + activated; the surveillance/adjustment
- * logic is added in Steps 2–4.
+ * Henri budget plugin — registers the budget surveillance cron jobs (alert poll +
+ * daily snapshot).
+ *
+ * NOTE (GRA-42 Step 4 / GRA-46): the three Leadership budget *tools*
+ * (henri_budget_status / henri_adjust_budget / henri_resolve_budget) are intentionally
+ * NOT registered here. RBAC discovery showed the Paperclip plugin-SDK tool handler
+ * receives only `{ agentId }` (no caller groups/permissions) and tool declarations carry
+ * no permission field — so this layer cannot enforce the leadership-only (paperclip.budget)
+ * gate or emit the per-tool audit. Those tools therefore live in the Henri MCP server
+ * (apps/mcp-server `BudgetPlugin`), whose PluginManager filters by `requiredPermission`
+ * (resolved from the human caller's RBAC groups via config/rbac.json) and emits
+ * `backoffice.audit.tool_invoked` via `auditCategory`. This plugin keeps only the
+ * background jobs, which need no caller identity.
  */
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.tools.register(
-      'henri_budget_status',
-      {
-        displayName: 'Henri budget status',
-        description:
-          'Report current budget consumption and policy status for a scope (company/agent/project).',
-        parametersSchema: {
-          type: 'object',
-          required: ['scopeType', 'scopeId'],
-          additionalProperties: false,
-          properties: {
-            scopeType: { type: 'string', enum: ['company', 'agent', 'project'] },
-            scopeId: { type: 'string' },
-          },
-        },
-      },
-      async (): Promise<ToolResult> => notImplemented('henri_budget_status', 'Step 2'),
-    );
-
-    ctx.tools.register(
-      'henri_adjust_budget',
-      {
-        displayName: 'Henri adjust budget',
-        description: 'Create or update a budget policy for a scope (amount, thresholds, hard-stop).',
-        parametersSchema: {
-          type: 'object',
-          required: ['scopeType', 'scopeId', 'amount'],
-          additionalProperties: false,
-          properties: {
-            scopeType: { type: 'string', enum: ['company', 'agent', 'project'] },
-            scopeId: { type: 'string' },
-            amount: { type: 'number' },
-            warnPercent: { type: 'number' },
-            hardStopEnabled: { type: 'boolean' },
-            notifyEnabled: { type: 'boolean' },
-            isActive: { type: 'boolean' },
-          },
-        },
-      },
-      async (): Promise<ToolResult> => notImplemented('henri_adjust_budget', 'Step 3'),
-    );
-
-    ctx.tools.register(
-      'henri_resolve_budget',
-      {
-        displayName: 'Henri resolve budget incident',
-        description: 'Resolve a budget incident: keep paused, or raise the budget and resume.',
-        parametersSchema: {
-          type: 'object',
-          required: ['action'],
-          additionalProperties: false,
-          properties: {
-            action: { type: 'string', enum: ['keep_paused', 'raise_budget_and_resume'] },
-            amount: { type: 'number' },
-            decisionNote: { type: 'string' },
-          },
-        },
-      },
-      async (): Promise<ToolResult> => notImplemented('henri_resolve_budget', 'Step 4'),
-    );
-
     // budget-alert-poll (GRA-42 Step 2): poll budgets/overview, alert Leadership on each
     // active incident (soft + hard) and each scope newly paused for budget. Deduped via
     // plugin.state so the same open incident is not re-notified every 5 min; a soft→hard
@@ -166,7 +108,7 @@ const plugin = definePlugin({
       }
     });
 
-    ctx.logger.info('Henri budget plugin ready (3 tool stubs + alert-poll & snapshot jobs)');
+    ctx.logger.info('Henri budget plugin ready (alert-poll & snapshot jobs)');
   },
 
   async onHealth() {

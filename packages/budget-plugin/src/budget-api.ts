@@ -100,8 +100,31 @@ export function readBudgetApiConfig(env: NodeJS.ProcessEnv): BudgetApiConfig | n
 
 type FetchLike = (
   url: string,
-  init?: { method?: string; headers?: Record<string, string> },
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
 ) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+
+/** Body for POST /budgets/policies — matches @paperclipai/shared `upsertBudgetPolicySchema`. */
+export interface UpsertBudgetPolicyBody {
+  scopeType: BudgetScopeType;
+  scopeId: string;
+  amount: number;
+  metric?: string;
+  windowKind?: string;
+  warnPercent?: number;
+  hardStopEnabled?: boolean;
+  notifyEnabled?: boolean;
+  isActive?: boolean;
+}
+
+/** Body for POST /budget-incidents/:id/resolve — matches `resolveBudgetIncidentSchema`. */
+export interface ResolveBudgetIncidentBody {
+  action: 'raise_budget_and_resume' | 'keep_paused';
+  amount?: number;
+  decisionNote?: string;
+}
+
+/** Result of a budget write: typed data on success, or a surfaced error string. */
+export type BudgetWriteResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 export class BudgetApiClient {
   constructor(
@@ -149,5 +172,46 @@ export class BudgetApiClient {
     const raw = await this.getJson<CostsByProjectResponse | ProjectCost[]>('/costs/by-project');
     if (!raw) return null;
     return Array.isArray(raw) ? raw : (raw.projects ?? []);
+  }
+
+  /** Authenticated POST returning parsed JSON, or a surfaced error (writes are interactive). */
+  private async postJson<T>(path: string, body: unknown): Promise<BudgetWriteResult<T>> {
+    const { apiUrl, apiKey, companyId } = this.config;
+    const url = `${apiUrl}/api/companies/${companyId}${path}`;
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    try {
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 400)}` };
+      return { ok: true, data: (text ? JSON.parse(text) : null) as T };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** POST /budgets/policies — create/update a budget policy (board key). Surfaces failures. */
+  async upsertBudgetPolicy(
+    body: UpsertBudgetPolicyBody,
+  ): Promise<BudgetWriteResult<BudgetPolicySummary>> {
+    return this.postJson<BudgetPolicySummary>('/budgets/policies', body);
+  }
+
+  /** POST /budget-incidents/:incidentId/resolve — resolve an incident (board key). Surfaces failures. */
+  async resolveBudgetIncident(
+    incidentId: string,
+    body: ResolveBudgetIncidentBody,
+  ): Promise<BudgetWriteResult<BudgetIncident>> {
+    return this.postJson<BudgetIncident>(
+      `/budget-incidents/${encodeURIComponent(incidentId)}/resolve`,
+      body,
+    );
   }
 }
