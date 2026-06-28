@@ -122,6 +122,9 @@ export function createBackofficeEvent(
 ): EvtEvent {
   return {
     eventType,
+    // Action time, stamped at emission (the EVT server also records an ingestion time).
+    // Gives the audit trail the moment the action occurred, not just when EVT received it.
+    timestamp: new Date().toISOString(),
     source: {
       application: 'gs-backoffice',
       version: '0.1.0',

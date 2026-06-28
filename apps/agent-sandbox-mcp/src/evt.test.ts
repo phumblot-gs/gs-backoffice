@@ -21,6 +21,26 @@ const EVT_ENV = {
   NODE_ENV: 'staging',
 } as NodeJS.ProcessEnv;
 
+describe('durable stderr backstop (SOC2)', () => {
+  it('writes the event to stderr even when EVT env is missing (no fetch)', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const ok = await emitToolInvoked('open_pr', 'governance', true, {
+      PAPERCLIP_AGENT_ID: 'agent-1',
+      PAPERCLIP_TASK_ID: 'GRA-12',
+    } as NodeJS.ProcessEnv);
+    expect(ok).toBe(false); // no EVT env → no publish
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // …but the event was still recorded to stderr for the run-log.
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.parse(errSpy.mock.calls[0][0] as string);
+    expect(logged.backoffice_audit.eventType).toBe('backoffice.audit.tool_invoked');
+    expect(logged.backoffice_audit.payload).toMatchObject({ tool: 'open_pr', issueId: 'GRA-12' });
+    errSpy.mockRestore();
+  });
+});
+
 describe('emitNotify (via shared EvtClient)', () => {
   it('publishes a backoffice.notify.google_chat event with Bearer auth + text/scope payload', async () => {
     const cap: { url?: string; init?: RequestInit } = {};

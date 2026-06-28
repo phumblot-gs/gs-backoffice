@@ -82,6 +82,15 @@ function parseApprovalPayload(approval: Record<string, unknown> | null): Approva
 }
 
 /**
+ * The id an approval/evolution EVT event scopes to. Reads `approvalId` (native approvals)
+ * with a legacy `ticketId` fallback — so `scope.resourceId` is never empty, keeping the
+ * SOC2 audit trail addressable by the resource it concerns.
+ */
+export function approvalScopeResourceId(payload: Record<string, unknown>): string {
+  return String(payload.approvalId ?? payload.ticketId ?? '');
+}
+
+/**
  * A short, single-line "what is this about" for an approval — the requester's intent.
  * Prefers an explicit `request`/`summary` parameter, then free-text notes, then the
  * first parameter value. Truncated for Chat cards and the approver's review.
@@ -531,7 +540,7 @@ export class PaperclipPlugin implements ServicePlugin {
         {
           accountId: this.evtAccountId,
           resourceType: 'approval',
-          resourceId: String(payload.ticketId ?? ''),
+          resourceId: approvalScopeResourceId(payload),
         },
         payload,
         this.environment,
@@ -560,7 +569,7 @@ export class PaperclipPlugin implements ServicePlugin {
         {
           accountId: this.evtAccountId,
           resourceType: 'evolution',
-          resourceId: String(payload.ticketId ?? ''),
+          resourceId: approvalScopeResourceId(payload),
         },
         payload,
         this.environment,
