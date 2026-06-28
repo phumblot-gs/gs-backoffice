@@ -94,6 +94,16 @@ export function canApprove(access: ResolvedAccess, scope: string | null): boolea
 }
 
 /**
+ * Whether a resolved user may manage budgets (create/adjust policies, resolve
+ * incidents). Reserved to leadership (Management Team + Comex) via the
+ * `paperclip.budget` permission. Superusers (`*`) always pass.
+ */
+export function canManageBudget(access: ResolvedAccess): boolean {
+  if (access.permissions.includes('*')) return true; // superuser / dev
+  return access.permissions.includes('paperclip.budget');
+}
+
+/**
  * Accumulate the UNION of permissions / scopes / workflows / agents over the
  * intersection of `userGroups` and the configured groups.
  */

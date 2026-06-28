@@ -205,6 +205,20 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "EVT_ACCOUNT_ID"
         valueFrom = "${var.app_secrets_arn}:EVT_ACCOUNT_ID::"
       },
+      # Native budget API (GRA-42 Step 2): the budget plugin worker reads budgets/overview
+      # over loopback. Mirrors the mcp-server container + the ADAPTER_ENV_PASSTHROUGH patch.
+      {
+        name      = "PAPERCLIP_API_URL"
+        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_URL::"
+      },
+      {
+        name      = "PAPERCLIP_API_KEY"
+        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_KEY::"
+      },
+      {
+        name      = "PAPERCLIP_COMPANY_ID"
+        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_COMPANY_ID::"
+      },
     ]
     logConfiguration = {
       logDriver = "awslogs"

@@ -162,6 +162,33 @@ export class PaperclipClient {
     return this.request('GET', `/agents/${agentId}`);
   }
 
+  // --- Native budget API (used by the Leadership-only Henri budget tools, GRA-46) ---
+  /** GET /companies/:companyId/budgets/overview. */
+  async getBudgetsOverview(companyId: string): Promise<Record<string, unknown>> {
+    return this.request('GET', `/companies/${companyId}/budgets/overview`);
+  }
+
+  /** POST /companies/:companyId/budgets/policies — create/update a budget policy. */
+  async upsertBudgetPolicy(
+    companyId: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.request('POST', `/companies/${companyId}/budgets/policies`, body);
+  }
+
+  /** POST /companies/:companyId/budget-incidents/:incidentId/resolve. */
+  async resolveBudgetIncident(
+    companyId: string,
+    incidentId: string,
+    body: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      'POST',
+      `/companies/${companyId}/budget-incidents/${incidentId}/resolve`,
+      body,
+    );
+  }
+
   async health(): Promise<{ status: string }> {
     const res = await fetch(`${this.apiUrl}/health`);
     return (await res.json()) as { status: string };

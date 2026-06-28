@@ -65,6 +65,11 @@ const REPLACEMENT = `const ADAPTER_ENV_PASSTHROUGH = [
     "EVT_API_URL",
     "EVT_API_KEY",
     "EVT_ACCOUNT_ID",
+    // Native budget API (GRA-42): the budget plugin worker reads budgets/overview over
+    // loopback using the board key, mirroring the mcp-server PaperclipClient convention.
+    "PAPERCLIP_API_URL",
+    "PAPERCLIP_API_KEY",
+    "PAPERCLIP_COMPANY_ID",
 ];`;
 
 // The passthrough only applies to plugins with `environment.drivers.register`.

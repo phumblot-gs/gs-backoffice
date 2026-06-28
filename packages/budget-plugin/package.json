@@ -1,0 +1,32 @@
+{
+  "name": "@gs-backoffice/budget-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Paperclip plugin: Henri budget surveillance & adjustment (alert polling, daily snapshots, budget status/adjust/resolve tools).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/manifest.js",
+    "worker": "./dist/worker.js"
+  },
+  "scripts": {
+    "build": "esbuild src/worker.ts src/manifest.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --external:@paperclipai/plugin-sdk",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.609.0"
+  },
+  "devDependencies": {
+    "@gs-backoffice/core": "workspace:*",
+    "@gs-backoffice/evt-client": "workspace:*",
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

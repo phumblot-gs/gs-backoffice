@@ -7,7 +7,7 @@
           "services": {
             "notion": { "actions": ["read"], "scopes": ["*"] },
             "paperclip": {
-              "actions": ["read", "create_ticket", "update_ticket", "approve"],
+              "actions": ["read", "create_ticket", "update_ticket", "approve", "budget"],
               "scopes": ["*"]
             }
           },
@@ -17,7 +17,7 @@
           "services": {
             "notion": { "actions": ["read"], "scopes": ["*"] },
             "paperclip": {
-              "actions": ["read", "create_ticket", "update_ticket", "approve"],
+              "actions": ["read", "create_ticket", "update_ticket", "approve", "budget"],
               "scopes": ["*"]
             }
           },
