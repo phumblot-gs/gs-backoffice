@@ -38,6 +38,20 @@ jobs:
           git merge --no-edit origin/main
           git push origin staging
 
+      # Audit (SOC2): record the human go-live decision (the PR merge) in the backoffice
+      # trail — it otherwise lives only in GitHub. Best-effort; never fails the promotion.
+      - name: Emit backoffice.evolution.merged
+        env:
+          EVT_API_URL: ${{ secrets.EVT_API_URL }}
+          EVT_API_KEY: ${{ secrets.EVT_API_KEY }}
+          EVT_ACCOUNT_ID: ${{ secrets.EVT_ACCOUNT_ID }}
+          EVT_EVENT_TYPE: backoffice.evolution.merged
+          EVT_RESOURCE_TYPE: evolution
+          EVT_RESOURCE_ID: ${{ github.event.pull_request.merge_commit_sha }}
+          EVT_ACTOR: ${{ github.event.pull_request.merged_by.login }}
+          EVT_PAYLOAD: '{"prNumber":${{ github.event.pull_request.number }},"url":"${{ github.event.pull_request.html_url }}","branch":"${{ github.event.pull_request.head.ref }}","baseRef":"main","mergedBy":"${{ github.event.pull_request.merged_by.login }}","sha":"${{ github.event.pull_request.merge_commit_sha }}"}'
+        run: node scripts/emit-evt.mjs
+
       # A push made with GITHUB_TOKEN does NOT re-trigger workflows, so trigger the
       # staging deploy explicitly on the freshly-updated staging branch.
       - name: Trigger Deploy Staging
