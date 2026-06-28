@@ -39,7 +39,7 @@ export interface BudgetOverview {
   pausedProjectCount?: number;
 }
 
-export interface UpsertBudgetPolicyBody {
+export type UpsertBudgetPolicyBody = {
   scopeType: BudgetScopeType;
   scopeId: string;
   amount: number;
@@ -49,10 +49,10 @@ export interface UpsertBudgetPolicyBody {
   hardStopEnabled?: boolean;
   notifyEnabled?: boolean;
   isActive?: boolean;
-}
+};
 
-export interface ResolveBudgetIncidentBody {
+export type ResolveBudgetIncidentBody = {
   action: 'raise_budget_and_resume' | 'keep_paused';
   amount?: number;
   decisionNote?: string;
-}
+};

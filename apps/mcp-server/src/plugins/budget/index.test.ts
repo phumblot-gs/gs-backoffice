@@ -5,12 +5,7 @@ import type { EvtClient } from '@gs-backoffice/evt-client';
 import { upsertBudgetPolicySchema, resolveBudgetIncidentSchema } from '@paperclipai/shared';
 import { PluginManager } from '../manager.js';
 import type { ToolContext, PluginInitConfig } from '../types.js';
-import {
-  BudgetPlugin,
-  buildUpsertBody,
-  buildResolveBody,
-  type BudgetClient,
-} from './index.js';
+import { BudgetPlugin, buildUpsertBody, buildResolveBody, type BudgetClient } from './index.js';
 
 const logger = pino({ level: 'silent' });
 
@@ -48,7 +43,8 @@ const OVERVIEW = {
 
 class FakeClient implements BudgetClient {
   upsertCalls: Array<{ companyId: string; body: Record<string, unknown> }> = [];
-  resolveCalls: Array<{ companyId: string; incidentId: string; body: Record<string, unknown> }> = [];
+  resolveCalls: Array<{ companyId: string; incidentId: string; body: Record<string, unknown> }> =
+    [];
   async getBudgetsOverview(): Promise<Record<string, unknown>> {
     return OVERVIEW as unknown as Record<string, unknown>;
   }
@@ -108,7 +104,9 @@ describe('BudgetPlugin body construction (contract)', () => {
       ),
     ).not.toThrow();
     expect(() =>
-      resolveBudgetIncidentSchema.parse(buildResolveBody({ incidentId: 'i', action: 'keep_paused' })),
+      resolveBudgetIncidentSchema.parse(
+        buildResolveBody({ incidentId: 'i', action: 'keep_paused' }),
+      ),
     ).not.toThrow();
   });
 });
@@ -119,7 +117,11 @@ describe('BudgetPlugin RBAC (leadership only)', () => {
     await mgr.register(new BudgetPlugin(new FakeClient()), initConfig());
     const names = (perms: string[]) => mgr.getAuthorizedTools(perms).map((t) => t.name);
     expect(names(['paperclip.budget'])).toEqual(
-      expect.arrayContaining(['henri_budget_status', 'henri_adjust_budget', 'henri_resolve_budget']),
+      expect.arrayContaining([
+        'henri_budget_status',
+        'henri_adjust_budget',
+        'henri_resolve_budget',
+      ]),
     );
     const denied = names(['paperclip.read', 'paperclip.create_ticket']);
     expect(denied).not.toContain('henri_budget_status');
@@ -157,7 +159,12 @@ describe('BudgetPlugin tool behaviour', () => {
     await plugin.initialize(initConfig());
     const resolve = plugin.getTools().find((t) => t.name === 'henri_resolve_budget')!;
     await resolve.execute(
-      { incidentId: 'inc-7', action: 'raise_budget_and_resume', amount: 750000, decisionNote: 'ok' },
+      {
+        incidentId: 'inc-7',
+        action: 'raise_budget_and_resume',
+        amount: 750000,
+        decisionNote: 'ok',
+      },
       leadership,
     );
     await resolve.execute({ incidentId: 'inc-9', action: 'keep_paused' }, leadership);

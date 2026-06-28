@@ -51,7 +51,9 @@ const plugin = definePlugin({
         for (const alert of toNotify) {
           const sent = await emitLeadershipChatNotify(buildAlertMessage(alert), process.env);
           if (!sent) {
-            ctx.logger.warn(`budget-alert-poll: EVT publish failed for ${alert.key} (best-effort).`);
+            ctx.logger.warn(
+              `budget-alert-poll: EVT publish failed for ${alert.key} (best-effort).`,
+            );
           }
         }
         await ctx.state.set(stateRef, nextState);

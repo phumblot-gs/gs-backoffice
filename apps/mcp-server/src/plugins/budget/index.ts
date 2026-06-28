@@ -1,17 +1,8 @@
 import { z } from 'zod';
 import type { Logger } from 'pino';
 import { PaperclipClient } from '../../paperclip-client.js';
-import type {
-  ServicePlugin,
-  PluginTool,
-  PluginInitConfig,
-  CallToolResult,
-} from '../types.js';
-import type {
-  BudgetOverview,
-  UpsertBudgetPolicyBody,
-  ResolveBudgetIncidentBody,
-} from './types.js';
+import type { ServicePlugin, PluginTool, PluginInitConfig, CallToolResult } from '../types.js';
+import type { BudgetOverview, UpsertBudgetPolicyBody, ResolveBudgetIncidentBody } from './types.js';
 
 /** Leadership-only permission (Management Team + Comex) — the canManageBudget rule / config/rbac.json. */
 const BUDGET_PERMISSION = 'paperclip.budget';
@@ -196,7 +187,9 @@ export class BudgetPlugin implements ServicePlugin {
             ),
           );
         } catch (e) {
-          return err(`Failed to read budget overview: ${e instanceof Error ? e.message : String(e)}`);
+          return err(
+            `Failed to read budget overview: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       },
     };
@@ -222,7 +215,7 @@ export class BudgetPlugin implements ServicePlugin {
       auditCategory: BUDGET_AUDIT_CATEGORY,
       execute: async (input) => {
         if (!this.client) return err('Budget API is not configured.');
-        const body = buildUpsertBody(input as AdjustInput);
+        const body = buildUpsertBody(input as unknown as AdjustInput);
         try {
           const res = await this.client.upsertBudgetPolicy(this.companyId, body);
           return ok(
@@ -252,10 +245,14 @@ export class BudgetPlugin implements ServicePlugin {
       auditCategory: BUDGET_AUDIT_CATEGORY,
       execute: async (input) => {
         if (!this.client) return err('Budget API is not configured.');
-        const args = input as ResolveInput;
+        const args = input as unknown as ResolveInput;
         const body = buildResolveBody(args);
         try {
-          const res = await this.client.resolveBudgetIncident(this.companyId, args.incidentId, body);
+          const res = await this.client.resolveBudgetIncident(
+            this.companyId,
+            args.incidentId,
+            body,
+          );
           return ok(
             `Budget incident ${args.incidentId} resolved (${body.action}).\n\n${JSON.stringify(res, null, 2)}`,
           );
