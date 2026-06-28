@@ -14,6 +14,7 @@
  * See docs/architecture/methods-officer-self-evolution.md (§10) and
  * docs/architecture/sandbox-code-tool.md.
  */
+import { resolveGitHubToken } from './github-app.js';
 
 /** The deployed sandbox plugin whose tools we proxy to. */
 export const SANDBOX_PLUGIN_ID = 'gs-backoffice.fly-sprites-sandbox-provider';
@@ -112,19 +113,51 @@ type FetchLike = (
 
 // Resolved once per process (the answer is stable for the run's identity).
 let cachedProjectId: string | null = null;
+let cachedProjectContext: ResolvedProjectContext | null = null;
 
-/** Test-only: clear the resolved-project cache. */
+/** Test-only: clear the resolved-project caches. */
 export function __resetProjectCache(): void {
   cachedProjectId = null;
+  cachedProjectContext = null;
+}
+
+/**
+ * Read the run's own project id from its issue (`GET /api/issues/{taskIssueId}`), which
+ * returns both `projectId` and a resolved `project` object. Best-effort: returns
+ * undefined (never throws) so resolution can fall back to a company project.
+ */
+async function fetchIssueProjectId(
+  cfg: ProxyConfig,
+  fetchImpl: FetchLike,
+): Promise<string | undefined> {
+  const issueId = (cfg.taskIssueId || '').trim();
+  if (!issueId) return undefined;
+  try {
+    const res = await fetchImpl(`${cfg.apiUrl}/api/issues/${issueId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+    });
+    if (!res.ok) return undefined;
+    const j = JSON.parse(await res.text()) as {
+      projectId?: string | null;
+      project?: { id?: string | null } | null;
+    };
+    return (j.projectId || j.project?.id || undefined) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * Resolve the `projectId` to send in runContext. Priority:
  *   1. `PAPERCLIP_PROJECT_ID` env (explicit override, if it ever propagates).
- *   2. The first project the actor is authorized for in its company
- *      (`GET /api/companies/{companyId}/projects`). The route only checks that the
- *      project belongs to the company, and the sandbox plugin does not use projectId,
- *      so any authorized company project satisfies the gate. Cached after first call.
+ *   2. The run's OWN project, read from its issue (`GET /api/issues/{taskIssueId}` →
+ *      `projectId`/`project.id`). This is the correct project, so repoUrl + the engineer
+ *      are resolved from it (not just any project the actor can see).
+ *   3. The first project the actor is authorized for in its company
+ *      (`GET /api/companies/{companyId}/projects`) — a fallback that still satisfies the
+ *      executeTool gate (the route only checks the project belongs to the company).
+ * Cached after the first call.
  */
 export async function resolveProjectId(
   cfg: ProxyConfig,
@@ -132,6 +165,12 @@ export async function resolveProjectId(
 ): Promise<string> {
   if (cfg.runContext.projectId) return cfg.runContext.projectId;
   if (cachedProjectId) return cachedProjectId;
+
+  const fromIssue = await fetchIssueProjectId(cfg, fetchImpl);
+  if (fromIssue) {
+    cachedProjectId = fromIssue;
+    return fromIssue;
+  }
 
   const url = `${cfg.apiUrl}/api/companies/${cfg.runContext.companyId}/projects`;
   let res;
@@ -175,6 +214,113 @@ export async function resolveProjectId(
   }
   cachedProjectId = first;
   return first;
+}
+
+/**
+ * What the run's project context yields for the tools: the repo bound to the project
+ * and the engineer agent — so the orchestrator need not be told either. Any field may
+ * be undefined if the project has no repo bound / no engineer assigned.
+ */
+export interface ResolvedProjectContext {
+  projectId: string;
+  repoUrl?: string;
+  defaultRef?: string;
+  engineerAgentId?: string;
+}
+
+/**
+ * Resolve the run's project context once per process: the project's bound `repoUrl`
+ * (from `codebase.repoUrl`, a read-only projection of the primary workspace) and the
+ * company's `engineer` agent. Both are read-only GETs — they never provision a
+ * workspace, so the sandbox isolation boundary is untouched. Best-effort per field:
+ * a missing repo/engineer leaves that field undefined (the caller raises a precise
+ * error only if the value is actually needed and was not passed explicitly).
+ */
+export async function resolveProjectContext(
+  cfg: ProxyConfig,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<ResolvedProjectContext> {
+  if (cachedProjectContext) return cachedProjectContext;
+  const projectId = await resolveProjectId(cfg, fetchImpl);
+  const ctx: ResolvedProjectContext = { projectId };
+
+  // repoUrl + defaultRef from the project's codebase projection (or its primary workspace).
+  try {
+    const res = await fetchImpl(`${cfg.apiUrl}/api/projects/${projectId}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+    });
+    if (res.ok) {
+      const p = JSON.parse(await res.text()) as {
+        codebase?: { repoUrl?: string | null; defaultRef?: string | null } | null;
+        primaryWorkspace?: { repoUrl?: string | null; defaultRef?: string | null } | null;
+      };
+      ctx.repoUrl = (p.codebase?.repoUrl || p.primaryWorkspace?.repoUrl || undefined) ?? undefined;
+      ctx.defaultRef =
+        (p.codebase?.defaultRef || p.primaryWorkspace?.defaultRef || undefined) ?? undefined;
+    }
+  } catch {
+    /* leave repoUrl/defaultRef unset; resolveRepoUrl errors only if actually needed */
+  }
+
+  // The engineer agent (role === "engineer") — the default assignee for engineer steps.
+  try {
+    const res = await fetchImpl(`${cfg.apiUrl}/api/companies/${cfg.runContext.companyId}/agents`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${cfg.apiKey}` },
+    });
+    if (res.ok) {
+      const raw = JSON.parse(await res.text());
+      const arr = (Array.isArray(raw) ? raw : (raw.agents ?? raw.data ?? [])) as Array<{
+        id?: string;
+        role?: string;
+      }>;
+      ctx.engineerAgentId = arr.find((a) => a?.role === 'engineer' && typeof a.id === 'string')?.id;
+    }
+  } catch {
+    /* leave engineerAgentId unset */
+  }
+
+  cachedProjectContext = ctx;
+  return ctx;
+}
+
+/**
+ * The git URL to operate on: the explicit value if the agent passed one, else the repo
+ * bound to the run's project. Throws a precise, actionable error if neither is available.
+ */
+export async function resolveRepoUrl(
+  cfg: ProxyConfig,
+  explicit?: string,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<string> {
+  const v = (explicit || '').trim();
+  if (v) return v;
+  const ctx = await resolveProjectContext(cfg, fetchImpl);
+  if (ctx.repoUrl) return ctx.repoUrl;
+  throw new Error(
+    `agent-sandbox-mcp: no repoUrl given and project ${ctx.projectId} has no repo bound. ` +
+      `Set the project's primary workspace repoUrl (sourceType git_repo), or pass repoUrl explicitly.`,
+  );
+}
+
+/**
+ * The agent to assign an engineer step to: the explicit value if given, else the
+ * company's `engineer` agent. Throws a precise error if neither is available.
+ */
+export async function resolveEngineerAgentId(
+  cfg: ProxyConfig,
+  explicit?: string,
+  fetchImpl: FetchLike = fetch as unknown as FetchLike,
+): Promise<string> {
+  const v = (explicit || '').trim();
+  if (v) return v;
+  const ctx = await resolveProjectContext(cfg, fetchImpl);
+  if (ctx.engineerAgentId) return ctx.engineerAgentId;
+  throw new Error(
+    `agent-sandbox-mcp: no assigneeAgentId given and no agent with role "engineer" found ` +
+      `in company ${cfg.runContext.companyId}. Assign an engineer agent, or pass assigneeAgentId explicitly.`,
+  );
 }
 
 /**
@@ -353,7 +499,7 @@ export async function openPr(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ number: number; url: string }> {
   const { owner, repo } = parseGitHubRepo(input.repoUrl);
-  const token = githubToken('push', env);
+  const token = await resolveGitHubToken({ patFallback: () => githubToken('push', env), env });
   const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
   const res = await fetchImpl(url, {
     method: 'POST',
@@ -380,7 +526,7 @@ export async function getDiff(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const { owner, repo } = parseGitHubRepo(input.repoUrl);
-  const token = githubToken('read', env);
+  const token = await resolveGitHubToken({ patFallback: () => githubToken('read', env), env });
   const range = `${encodeURIComponent(input.base)}...${encodeURIComponent(input.head)}`;
   const url = `${GITHUB_API}/repos/${owner}/${repo}/compare/${range}`;
   const res = await fetchImpl(url, {

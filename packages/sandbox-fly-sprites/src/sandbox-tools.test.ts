@@ -3,6 +3,7 @@ import {
   buildGitCredentialSetup,
   buildCheckoutScript,
   buildCodeTaskCheckoutScript,
+  buildFormatScript,
   SANDBOX_WORK_DIR,
 } from './sandbox.js';
 import {
@@ -107,6 +108,20 @@ describe('buildCodeTaskCheckoutScript', () => {
     expect(s).toContain('git checkout -B "$TB" "origin/$TB"');
     expect(s).toContain('git checkout -B "$TB" "origin/$BB"'); // else from base
     expect(s).toContain('credential.helper');
+  });
+});
+
+describe('buildFormatScript', () => {
+  it('runs the repo prettier via pnpm, best-effort (every step tolerates failure)', () => {
+    const s = buildFormatScript(SANDBOX_WORK_DIR);
+    expect(s).toContain(`cd '${SANDBOX_WORK_DIR}'`);
+    expect(s).toContain('corepack enable');
+    expect(s).toContain('pnpm install');
+    expect(s).toContain('pnpm format');
+    expect(s).toContain('prettier --write .'); // fallback if `pnpm format` is unavailable
+    // Best-effort: no step may abort the task.
+    expect(s).toContain('|| true');
+    expect(s).toContain('|| exit 0');
   });
 });
 

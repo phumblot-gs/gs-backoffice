@@ -185,6 +185,21 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "SANDBOX_GITHUB_PUSH_TOKEN"
         valueFrom = "${var.app_secrets_arn}:SANDBOX_GITHUB_PUSH_TOKEN::"
       },
+      # GitHub App "GRAFMAKER Henri" — the bridge mints short-lived installation tokens
+      # so PRs are authored by the bot (author != the human approver, SOC2 CC8). The
+      # bridge inherits this container env. Absent/placeholder → falls back to the PATs.
+      {
+        name      = "GITHUB_APP_ID"
+        valueFrom = "${var.app_secrets_arn}:GITHUB_APP_ID::"
+      },
+      {
+        name      = "GITHUB_APP_INSTALLATION_ID"
+        valueFrom = "${var.app_secrets_arn}:GITHUB_APP_INSTALLATION_ID::"
+      },
+      {
+        name      = "GITHUB_APP_PRIVATE_KEY"
+        valueFrom = "${var.app_secrets_arn}:GITHUB_APP_PRIVATE_KEY::"
+      },
       {
         name      = "PAPERCLIP_SECRETS_MASTER_KEY"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_SECRETS_MASTER_KEY::"
