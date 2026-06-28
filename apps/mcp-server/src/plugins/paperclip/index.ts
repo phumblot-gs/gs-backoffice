@@ -35,9 +35,11 @@ export function isSensitiveProcess(title: string | undefined | null): boolean {
   return !!title && title.trimStart().startsWith('!');
 }
 
-// Machine-readable marker embedded in the approval ticket description (the API has
-// no metadata field). The fenced JSON block is the source of truth re-read on approval.
-const APPROVAL_MARKER = 'gs-approval-request';
+// Every sensitive process is gated by a NATIVE Paperclip approval of this generic type
+// (Paperclip's approval `type` enum is fixed; `request_board_approval` is the board gate).
+// We distinguish processes via payload.processCode. State = the native approval `status`
+// (pending/approved/rejected); metadata = the native `payload` (no description hack).
+const APPROVAL_TYPE = 'request_board_approval';
 
 // The self-evolution intake process (leadership-reserved, sensitive). When it goes
 // through the approval gate we ALSO emit the evolution lifecycle's CEO-side events
@@ -45,8 +47,12 @@ const APPROVAL_MARKER = 'gs-approval-request';
 // is auditable end-to-end alongside the bridge's backoffice.evolution.* events.
 const REQUEST_EVOLUTION_CODE = 'request_evolution';
 
+/**
+ * What we store in the native approval's `payload`. Native approvals don't record a human
+ * requester/approver or any scope, so we keep `requestedBy` + `scope` here and enforce the
+ * policy (scope + separation-of-duties) in this MCP layer before calling the native endpoint.
+ */
 interface ApprovalPayload {
-  kind: typeof APPROVAL_MARKER;
   routineId: string;
   processCode: string;
   scope: string | null;
@@ -57,6 +63,22 @@ interface ApprovalPayload {
   summary?: string;
   /** Name of the Paperclip project the routine belongs to (shown in Chat + review). */
   projectName?: string;
+}
+
+/** Read our ApprovalPayload back from a native approval's `payload` field. */
+function parseApprovalPayload(approval: Record<string, unknown> | null): ApprovalPayload | null {
+  const p = approval?.payload as Record<string, unknown> | undefined;
+  if (!p || typeof p.routineId !== 'string' || typeof p.processCode !== 'string') return null;
+  return {
+    routineId: p.routineId,
+    processCode: p.processCode,
+    scope: typeof p.scope === 'string' ? p.scope : null,
+    requestedBy: typeof p.requestedBy === 'string' ? p.requestedBy : '',
+    parameters: (p.parameters as Record<string, string>) ?? undefined,
+    notes: typeof p.notes === 'string' ? p.notes : undefined,
+    summary: typeof p.summary === 'string' ? p.summary : undefined,
+    projectName: typeof p.projectName === 'string' ? p.projectName : undefined,
+  };
 }
 
 /**
@@ -101,49 +123,6 @@ export function missingRequiredVariables(
       return required && !hasDefault && !supplied;
     })
     .map((v) => String(v.name));
-}
-
-export function buildApprovalDescription(p: ApprovalPayload): string {
-  const human = [
-    `**Sensitive process awaiting approval.**`,
-    ``,
-    `- Process: \`${p.processCode}\``,
-    p.projectName ? `- Project: ${p.projectName}` : null,
-    p.summary ? `- Summary: ${p.summary}` : null,
-    `- Requested by: ${p.requestedBy}`,
-    `- Approval scope: ${p.scope ?? 'leadership (no scope declared)'}`,
-    p.parameters && Object.keys(p.parameters).length
-      ? `- Parameters: ${Object.entries(p.parameters)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(', ')}`
-      : null,
-    p.notes ? `- Notes: ${p.notes}` : null,
-    ``,
-    `An authorized approver (≠ requester) must run \`henri_approve\` on this ticket.`,
-    ``,
-    '```json',
-    JSON.stringify(p),
-    '```',
-  ]
-    .filter((l) => l !== null)
-    .join('\n');
-  return human;
-}
-
-export function parseApprovalDescription(
-  description: string | undefined | null,
-): ApprovalPayload | null {
-  if (!description) return null;
-  const m = description.match(/```json\s*(\{[\s\S]*?\})\s*```/);
-  if (!m) return null;
-  try {
-    const parsed = JSON.parse(m[1]) as ApprovalPayload;
-    return parsed.kind === APPROVAL_MARKER && parsed.routineId && parsed.processCode
-      ? parsed
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 export class PaperclipPlugin implements ServicePlugin {
@@ -250,12 +229,16 @@ export class PaperclipPlugin implements ServicePlugin {
         'to state their decision). It does NOT decide on the human’s behalf — the human’s ' +
         'selection is recorded as their decision. Use this when an approver opens an approval link.',
       schema: z.object({
-        ticketId: z.string().describe('The approval ticket ID to review (e.g., "GRA-7")'),
+        approvalId: z
+          .string()
+          .describe(
+            'The approval id to review (from the Google Chat link or henri_list_approvals)',
+          ),
       }),
       requiredPermission: 'paperclip.approve',
       auditCategory: 'approval.reviewed',
       execute: async (input, context, extra) =>
-        this.executeReviewApproval(input as { ticketId: string }, context, extra),
+        this.executeReviewApproval(input as { approvalId: string }, context, extra),
     };
   }
 
@@ -268,15 +251,15 @@ export class PaperclipPlugin implements ServicePlugin {
         'on approval the process runs. You cannot approve your own request, and you must not ' +
         'choose the decision yourself — it comes from the human.',
       schema: z.object({
-        ticketId: z.string().describe('The approval ticket ID (e.g., "GRA-7")'),
+        approvalId: z.string().describe('The approval id (from henri_list_approvals / the link)'),
         decision: z.enum(['approve', 'reject']).describe("The human's decision"),
-        note: z.string().optional().describe('Optional decision note (recorded on the ticket)'),
+        note: z.string().optional().describe('Optional decision note (recorded on the approval)'),
       }),
       requiredPermission: 'paperclip.approve',
       auditCategory: 'approval.decided',
       execute: async (input, context) =>
         this.executeApprove(
-          input as { ticketId: string; decision: 'approve' | 'reject'; note?: string },
+          input as { approvalId: string; decision: 'approve' | 'reject'; note?: string },
           context,
         ),
     };
@@ -529,8 +512,8 @@ export class PaperclipPlugin implements ServicePlugin {
   /** A claude.ai deep-link that opens a prefilled prompt for the approver to decide.
    * Points at the READ-FIRST henri_review_approval tool (it shows the request and presents
    * the decision to the human), avoiding asking the assistant to invoke an approval action. */
-  private approvalDeepLink(ticketId: string, code: string): string {
-    const q = `I need to review back office approval request ${ticketId} (sensitive process "${code}"). Use henri_review_approval with ticketId "${ticketId}" to show me the request and let me decide. Don't decide for me — I'll choose approve or reject.`;
+  private approvalDeepLink(approvalId: string, code: string): string {
+    const q = `I need to review back office approval request ${approvalId} (sensitive process "${code}"). Use henri_review_approval with approvalId "${approvalId}" to show me the request and let me decide. Don't decide for me — I'll choose approve or reject.`;
     return `https://claude.ai/new?q=${encodeURIComponent(q)}`;
   }
 
@@ -607,7 +590,7 @@ export class PaperclipPlugin implements ServicePlugin {
     }
   }
 
-  /** Create the approval-request ticket for a sensitive process (does NOT run it). */
+  /** Create a NATIVE Paperclip approval for a sensitive process (does NOT run it). */
   private async createApprovalRequest(
     match: Record<string, unknown>,
     code: string,
@@ -618,7 +601,6 @@ export class PaperclipPlugin implements ServicePlugin {
     const summary = summarizeRequest(input.parameters, input.notes);
     const projectName = await this.resolveProjectName(match.projectId);
     const payload: ApprovalPayload = {
-      kind: APPROVAL_MARKER,
       routineId: String(match.id),
       processCode: code,
       scope,
@@ -628,24 +610,21 @@ export class PaperclipPlugin implements ServicePlugin {
       summary: summary || undefined,
       projectName: projectName || undefined,
     };
-    const issue = await this.client.createIssue({
-      companyId: this.companyId,
-      title: `Approval needed: ${code} (requested by ${context.userEmail})`,
-      status: 'blocked',
-      priority: 'high',
-      description: buildApprovalDescription(payload),
+    const approval = await this.client.createApproval(this.companyId, {
+      type: APPROVAL_TYPE,
+      payload: { ...payload },
     });
-    const ticketId = String(issue.identifier ?? issue.shortId ?? issue.id ?? '');
+    const approvalId = String(approval.id ?? '');
     await this.publishApproval(
       'backoffice.approval.requested',
       {
-        ticketId,
+        approvalId,
         processCode: code,
         scope,
         requestedBy: context.userEmail,
         summary: summary || undefined,
         projectName: projectName || undefined,
-        approveUrl: this.approvalDeepLink(ticketId, code),
+        approveUrl: this.approvalDeepLink(approvalId, code),
       },
       context,
     );
@@ -653,7 +632,7 @@ export class PaperclipPlugin implements ServicePlugin {
     if (code.toLowerCase() === REQUEST_EVOLUTION_CODE) {
       await this.publishEvolution(
         'backoffice.evolution.plan_proposed',
-        { ticketId, processCode: code, requestedBy: context.userEmail, notes: input.notes },
+        { approvalId, processCode: code, requestedBy: context.userEmail, notes: input.notes },
         context,
       );
     }
@@ -662,39 +641,35 @@ export class PaperclipPlugin implements ServicePlugin {
       content: [
         {
           type: 'text',
-          text: `🔒 **${code}** is a sensitive process — it requires approval before running.\n\nApproval request created: ticket **${ticketId}**. ${who} (other than you) must approve it via \`henri_approve\`, then it runs automatically. Track it with \`henri_ticket_status ${ticketId}\`.`,
+          text: `🔒 **${code}** is a sensitive process — it requires approval before running.\n\nApproval request **${approvalId}** created. ${who} (other than you) must decide it (via the Google Chat link or henri_review_approval), then it runs automatically.`,
         },
       ],
     };
   }
 
   /**
-   * Load a pending approval ticket and verify the caller may decide it: it IS an approval
-   * request, still blocked, NOT the caller's own request (separation of duties), and within
-   * their approve scope. Returns the parsed payload, or a ready-to-return error result.
-   * Shared by henri_review_approval and henri_approve.
+   * Load a pending NATIVE approval and verify the caller may decide it: it exists, is still
+   * `pending`, is NOT the caller's own request (separation of duties — native approvals don't
+   * enforce this, so we do), and is within their approve scope. Returns the parsed payload +
+   * the approval id, or a ready-to-return error result. Shared by review + approve.
    */
   private async loadAndAuthorizeApproval(
-    ticketId: string,
+    approvalId: string,
     context: ToolContext,
   ): Promise<{ ok: true; payload: ApprovalPayload } | { ok: false; result: CallToolResult }> {
-    const issue = await this.client.getIssue(ticketId);
-    const payload = parseApprovalDescription(
-      typeof issue.description === 'string' ? issue.description : null,
-    );
+    const approval = await this.client.getApproval(approvalId);
+    const payload = parseApprovalPayload(approval);
     const err = (text: string, isError = true): { ok: false; result: CallToolResult } => ({
       ok: false,
       result: { content: [{ type: 'text', text }], isError },
     });
-    if (!payload) return err(`Ticket ${ticketId} is not a pending approval request.`);
-    if (issue.status && issue.status !== 'blocked')
-      return err(
-        `Approval ${ticketId} is already resolved (status: ${String(issue.status)}).`,
-        false,
-      );
+    if (!approval || !payload) return err(`Approval ${approvalId} was not found.`);
+    const status = String(approval.status ?? '');
+    if (status !== 'pending')
+      return err(`Approval ${approvalId} is already resolved (status: ${status}).`, false);
     if (payload.requestedBy.toLowerCase() === context.userEmail.toLowerCase())
       return err(
-        `You cannot decide your own request (${ticketId}). Another authorized approver must.`,
+        `You cannot decide your own request (${approvalId}). Another authorized approver must.`,
       );
     if (!canApprove(context, payload.scope))
       return err(
@@ -710,21 +685,21 @@ export class PaperclipPlugin implements ServicePlugin {
    * decision the human already made — it never originates the decision.
    */
   private async performDecision(
-    ticketId: string,
+    approvalId: string,
     payload: ApprovalPayload,
     decision: 'approve' | 'reject',
     note: string | undefined,
     context: ToolContext,
   ): Promise<CallToolResult> {
+    // Record who actually decided (native approvals attribute the decision to "board",
+    // not the human), then resolve the native approval.
+    const decisionNote = `Decided by ${context.userEmail}${note ? `: ${note}` : ''}`;
     if (decision === 'reject') {
-      await this.client.updateIssue(ticketId, {
-        status: 'cancelled',
-        comment: `⛔ Rejected by ${context.userEmail}${note ? `: ${note}` : ''}.`,
-      });
+      await this.client.resolveApproval(approvalId, 'reject', decisionNote);
       await this.publishApproval(
         'backoffice.approval.decided',
         {
-          ticketId,
+          approvalId,
           processCode: payload.processCode,
           scope: payload.scope,
           decision: 'rejected',
@@ -737,33 +712,30 @@ export class PaperclipPlugin implements ServicePlugin {
         content: [
           {
             type: 'text',
-            text: `⛔ Request **${ticketId}** (${payload.processCode}) rejected. The process will not run.`,
+            text: `⛔ Request **${approvalId}** (${payload.processCode}) rejected. The process will not run.`,
           },
         ],
       };
     }
 
-    // Approve → run the routine now, on behalf of the original requester.
+    // Approve the native approval, then run the routine on behalf of the requester.
+    await this.client.resolveApproval(approvalId, 'approve', decisionNote);
     const run = await this.client.runRoutine(payload.routineId, {
       variables: payload.parameters,
       payload: {
         requestedBy: payload.requestedBy,
         approvedBy: context.userEmail,
         processCode: payload.processCode,
-        approvalTicket: ticketId,
+        approvalId,
         notes: payload.notes,
       },
     });
     const runId = String(run.id ?? run.runId ?? '');
     const runTicket = runId ? await this.resolveLinkedTicket(payload.routineId, runId) : null;
-    await this.client.updateIssue(ticketId, {
-      status: 'done',
-      comment: `✅ Approved by ${context.userEmail}${note ? `: ${note}` : ''}. Run started${runTicket ? ` → ${runTicket}` : ''}.`,
-    });
     await this.publishApproval(
       'backoffice.approval.decided',
       {
-        ticketId,
+        approvalId,
         processCode: payload.processCode,
         scope: payload.scope,
         decision: 'approved',
@@ -779,7 +751,7 @@ export class PaperclipPlugin implements ServicePlugin {
       await this.publishEvolution(
         'backoffice.evolution.plan_accepted',
         {
-          ticketId,
+          approvalId,
           processCode: payload.processCode,
           approver: context.userEmail,
           requestedBy: payload.requestedBy,
@@ -795,7 +767,7 @@ export class PaperclipPlugin implements ServicePlugin {
       content: [
         {
           type: 'text',
-          text: `✅ Request **${ticketId}** (${payload.processCode}) approved — process started as ${ref}.`,
+          text: `✅ Request **${approvalId}** (${payload.processCode}) approved — process started as ${ref}.`,
         },
       ],
     };
@@ -803,21 +775,21 @@ export class PaperclipPlugin implements ServicePlugin {
 
   /** henri_approve: record a HUMAN's explicit decision (approve/reject) on a pending request. */
   private async executeApprove(
-    input: { ticketId: string; decision: 'approve' | 'reject'; note?: string },
+    input: { approvalId: string; decision: 'approve' | 'reject'; note?: string },
     context: ToolContext,
   ): Promise<CallToolResult> {
     try {
-      const loaded = await this.loadAndAuthorizeApproval(input.ticketId, context);
+      const loaded = await this.loadAndAuthorizeApproval(input.approvalId, context);
       if (!loaded.ok) return loaded.result;
       return await this.performDecision(
-        input.ticketId,
+        input.approvalId,
         loaded.payload,
         input.decision,
         input.note,
         context,
       );
     } catch (err) {
-      this.logger.error({ error: err, ticketId: input.ticketId }, 'Approval decision failed');
+      this.logger.error({ error: err, approvalId: input.approvalId }, 'Approval decision failed');
       return {
         content: [
           {
@@ -837,16 +809,16 @@ export class PaperclipPlugin implements ServicePlugin {
    * which we then record with the human's choice. It never decides on the human's behalf.
    */
   private async executeReviewApproval(
-    input: { ticketId: string },
+    input: { approvalId: string },
     context: ToolContext,
     extra?: ToolExtra,
   ): Promise<CallToolResult> {
     try {
-      const loaded = await this.loadAndAuthorizeApproval(input.ticketId, context);
+      const loaded = await this.loadAndAuthorizeApproval(input.approvalId, context);
       if (!loaded.ok) return loaded.result;
       const p = loaded.payload;
       const details =
-        `Approval **${input.ticketId}** — \`${p.processCode}\`` +
+        `Approval **${input.approvalId}** — \`${p.processCode}\`` +
         (p.projectName ? ` · ${p.projectName}` : '') +
         `\n- Requested by: ${p.requestedBy}` +
         (p.summary ? `\n- Summary: ${p.summary}` : '') +
@@ -860,7 +832,7 @@ export class PaperclipPlugin implements ServicePlugin {
       // Render the decision form for the human to click (if the client supports it).
       const elicited = extra?.elicit
         ? await extra.elicit({
-            message: `${input.ticketId} — ${p.processCode}${p.summary ? `: ${p.summary}` : ''} (requested by ${p.requestedBy}). Your decision:`,
+            message: `${input.approvalId} — ${p.processCode}${p.summary ? `: ${p.summary}` : ''} (requested by ${p.requestedBy}). Your decision:`,
             schema: {
               type: 'object',
               properties: {
@@ -898,7 +870,7 @@ export class PaperclipPlugin implements ServicePlugin {
           content: [
             {
               type: 'text',
-              text: `No decision recorded for ${input.ticketId} — you ${elicited.action === 'decline' ? 'declined' : 'cancelled'} the prompt.`,
+              text: `No decision recorded for ${input.approvalId} — you ${elicited.action === 'decline' ? 'declined' : 'cancelled'} the prompt.`,
             },
           ],
         };
@@ -910,13 +882,13 @@ export class PaperclipPlugin implements ServicePlugin {
       const note = typeof comment === 'string' && comment.trim() ? comment.trim() : undefined;
       if (!decision) {
         return {
-          content: [{ type: 'text', text: `No valid decision selected for ${input.ticketId}.` }],
+          content: [{ type: 'text', text: `No valid decision selected for ${input.approvalId}.` }],
           isError: true,
         };
       }
-      return await this.performDecision(input.ticketId, p, decision, note, context);
+      return await this.performDecision(input.approvalId, p, decision, note, context);
     } catch (err) {
-      this.logger.error({ error: err, ticketId: input.ticketId }, 'Approval review failed');
+      this.logger.error({ error: err, approvalId: input.approvalId }, 'Approval review failed');
       return {
         content: [
           {
@@ -931,16 +903,12 @@ export class PaperclipPlugin implements ServicePlugin {
 
   private async executeListApprovals(context: ToolContext): Promise<CallToolResult> {
     try {
-      const issues = await this.client.listCompanyIssues(this.companyId);
-      const pending = issues
-        .map((i) => ({
-          i,
-          p: parseApprovalDescription(typeof i.description === 'string' ? i.description : null),
-        }))
+      const approvals = await this.client.listApprovals(this.companyId, 'pending');
+      const pending = approvals
+        .map((a) => ({ id: String(a.id ?? ''), p: parseApprovalPayload(a) }))
         .filter(
-          ({ i, p }) =>
+          ({ p }) =>
             p !== null &&
-            (i.status ?? 'blocked') === 'blocked' &&
             p.requestedBy.toLowerCase() !== context.userEmail.toLowerCase() &&
             canApprove(context, p.scope),
         );
@@ -949,8 +917,7 @@ export class PaperclipPlugin implements ServicePlugin {
           content: [{ type: 'text', text: 'No approval requests are awaiting your decision.' }],
         };
       }
-      const lines = pending.map(({ i, p }) => {
-        const id = String(i.identifier ?? i.shortId ?? i.id);
+      const lines = pending.map(({ id, p }) => {
         const proj = p!.projectName ? ` · ${p!.projectName}` : '';
         const sum = p!.summary ? ` — _${p!.summary}_` : '';
         return `- **${id}** — \`${p!.processCode}\`${proj} (scope: ${p!.scope ?? 'leadership'}), requested by ${p!.requestedBy}${sum}`;
@@ -959,7 +926,7 @@ export class PaperclipPlugin implements ServicePlugin {
         content: [
           {
             type: 'text',
-            text: `## Approval requests awaiting your decision\n\nDecide with henri_approve.\n\n${lines.join('\n')}`,
+            text: `## Approval requests awaiting your decision\n\nReview & decide with henri_review_approval (or henri_approve with the id + decision).\n\n${lines.join('\n')}`,
           },
         ],
       };
@@ -980,12 +947,6 @@ export class PaperclipPlugin implements ServicePlugin {
   private async executeTicketStatus(input: { ticketId: string }): Promise<CallToolResult> {
     try {
       const issue = await this.client.getIssue(input.ticketId);
-      // If this is a sensitive-process approval request, surface WHAT is being decided
-      // (process, project, summary, parameters) so an approver landing here from the
-      // Google Chat link sees the request — not just opaque status fields.
-      const approval = parseApprovalDescription(
-        typeof issue.description === 'string' ? issue.description : null,
-      );
       return {
         content: [
           {
@@ -999,18 +960,6 @@ export class PaperclipPlugin implements ServicePlugin {
                 assignee: issue.assigneeAgentId,
                 createdAt: issue.createdAt,
                 updatedAt: issue.updatedAt,
-                ...(approval
-                  ? {
-                      approvalRequest: {
-                        process: approval.processCode,
-                        project: approval.projectName ?? null,
-                        summary: approval.summary ?? null,
-                        requestedBy: approval.requestedBy,
-                        approvalScope: approval.scope ?? 'leadership',
-                        parameters: approval.parameters ?? {},
-                      },
-                    }
-                  : {}),
               },
               null,
               2,

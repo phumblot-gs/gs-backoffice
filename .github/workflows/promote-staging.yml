@@ -1,0 +1,51 @@
+name: Promote to Staging on Evolution Merge
+
+# When a self-evolution PR is merged to main (the human's validation gate), promote
+# main → staging so Paperclip continues the loop into a staging deployment without a
+# manual step. Scoped to evolution PRs so ordinary merges don't auto-deploy:
+#   - the Methods Officer's branches (methods-officer/*), or
+#   - any PR explicitly labelled `deploy:staging`.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write # push to the staging branch
+  actions: write # dispatch the Deploy Staging workflow
+
+jobs:
+  promote:
+    name: Promote main → staging
+    runs-on: ubuntu-latest
+    # Only on a real merge (not a closed-without-merge), and only for evolution PRs.
+    if: >-
+      github.event.pull_request.merged == true &&
+      ( startsWith(github.event.pull_request.head.ref, 'methods-officer/') ||
+        contains(github.event.pull_request.labels.*.name, 'deploy:staging') )
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge main into staging
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main staging
+          git checkout staging
+          git merge --no-edit origin/main
+          git push origin staging
+
+      # A push made with GITHUB_TOKEN does NOT re-trigger workflows, so trigger the
+      # staging deploy explicitly on the freshly-updated staging branch.
+      - name: Trigger Deploy Staging
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run deploy-staging.yml --ref staging
+
+      - name: Summary
+        run: |
+          echo "Promoted main → staging after merging PR #${{ github.event.pull_request.number }} (${{ github.event.pull_request.head.ref }})." >> "$GITHUB_STEP_SUMMARY"
+          echo "Deploy Staging dispatched on the staging branch." >> "$GITHUB_STEP_SUMMARY"
