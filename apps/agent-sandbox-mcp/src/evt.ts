@@ -58,7 +58,6 @@ async function publishEvent(
   const baseUrl = (env.EVT_API_URL || '').trim();
   const apiKey = (env.EVT_API_KEY || '').trim();
   const accountId = (env.EVT_ACCOUNT_ID || '').trim();
-  if (!baseUrl || !apiKey || !accountId) return false;
 
   const event = createBackofficeEvent(
     eventType,
@@ -67,6 +66,18 @@ async function publishEvent(
     payload,
     env.NODE_ENV === 'production' ? 'production' : 'staging',
   );
+
+  // Durable backstop (SOC2): always write the event to stderr — captured in the agent's
+  // Paperclip run-log, independent of EVT. (stdout is the MCP protocol channel; use stderr.)
+  // EVT publication below is best-effort; this guarantees a record even if EVT is down or
+  // unconfigured, giving the bridge the same audit durability the MCP server has via CloudWatch.
+  try {
+    console.error(JSON.stringify({ backoffice_audit: event }));
+  } catch {
+    /* logging must never break the tool */
+  }
+
+  if (!baseUrl || !apiKey || !accountId) return false;
   try {
     await new EvtClient({ baseUrl, apiKey }).publish(event);
     return true;

@@ -4,7 +4,20 @@ import {
   isSensitiveProcess,
   summarizeRequest,
   missingRequiredVariables,
+  approvalScopeResourceId,
 } from './index.js';
+
+describe('approvalScopeResourceId (audit scope never empty)', () => {
+  it('uses approvalId (native approvals)', () => {
+    expect(approvalScopeResourceId({ approvalId: 'appr-1', processCode: 'x' })).toBe('appr-1');
+  });
+  it('falls back to legacy ticketId', () => {
+    expect(approvalScopeResourceId({ ticketId: 'GRA-9' })).toBe('GRA-9');
+  });
+  it('returns empty string when neither is present', () => {
+    expect(approvalScopeResourceId({ processCode: 'x' })).toBe('');
+  });
+});
 
 describe('summarizeRequest', () => {
   it('prefers the request param, then summary, then notes, then first param', () => {
