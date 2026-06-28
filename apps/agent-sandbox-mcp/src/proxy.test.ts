@@ -256,12 +256,25 @@ describe('resolveRepoUrl / resolveEngineerAgentId', () => {
     expect(await resolveRepoUrl(CTX_CFG, undefined, f)).toBe('https://github.com/o/r.git');
   });
 
-  it('throws a precise error when no repo is bound', async () => {
+  it('falls back to BACKOFFICE_REPO_URL when the project has no repo bound', async () => {
     const f = routedFetch([
       { match: '/api/projects/p', payload: { codebase: { repoUrl: null } } },
       { match: '/api/companies/c/agents', payload: [] },
     ]);
-    await expect(resolveRepoUrl(CTX_CFG, undefined, f)).rejects.toThrow(/no repo bound/);
+    const env = { BACKOFFICE_REPO_URL: 'https://github.com/o/env-repo.git' } as NodeJS.ProcessEnv;
+    expect(await resolveRepoUrl(CTX_CFG, undefined, f, env)).toBe(
+      'https://github.com/o/env-repo.git',
+    );
+  });
+
+  it('throws a precise error when nothing provides a repoUrl', async () => {
+    const f = routedFetch([
+      { match: '/api/projects/p', payload: { codebase: { repoUrl: null } } },
+      { match: '/api/companies/c/agents', payload: [] },
+    ]);
+    await expect(resolveRepoUrl(CTX_CFG, undefined, f, {} as NodeJS.ProcessEnv)).rejects.toThrow(
+      /BACKOFFICE_REPO_URL is unset/,
+    );
   });
 
   it('returns the explicit assignee, else resolves the engineer', async () => {

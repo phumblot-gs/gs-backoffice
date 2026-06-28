@@ -293,14 +293,21 @@ export async function resolveRepoUrl(
   cfg: ProxyConfig,
   explicit?: string,
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const v = (explicit || '').trim();
   if (v) return v;
   const ctx = await resolveProjectContext(cfg, fetchImpl);
   if (ctx.repoUrl) return ctx.repoUrl;
+  // Fallback: a repo URL configured in the container env. We do NOT read it from a
+  // Paperclip primary workspace, because in 2026.609.0 a workspace `repoUrl` makes the
+  // host attempt a `git clone` (heartbeat.ts ensureManagedProjectWorkspace) on every run
+  // — a host checkout we deliberately avoid (code only ever runs in the Fly sandbox).
+  const envUrl = (env.BACKOFFICE_REPO_URL || '').trim();
+  if (envUrl) return envUrl;
   throw new Error(
-    `agent-sandbox-mcp: no repoUrl given and project ${ctx.projectId} has no repo bound. ` +
-      `Set the project's primary workspace repoUrl (sourceType git_repo), or pass repoUrl explicitly.`,
+    `agent-sandbox-mcp: no repoUrl given, project ${ctx.projectId} has no repo bound, and ` +
+      `BACKOFFICE_REPO_URL is unset. Set BACKOFFICE_REPO_URL on the container, or pass repoUrl explicitly.`,
   );
 }
 
