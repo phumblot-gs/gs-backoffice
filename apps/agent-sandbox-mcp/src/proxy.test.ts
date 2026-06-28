@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   readProxyConfig,
   resolveProjectId,
+  resolveProjectContext,
+  resolveRepoUrl,
+  resolveEngineerAgentId,
   executeSandboxTool,
   reportProgress,
   parseGitHubRepo,
@@ -102,6 +105,22 @@ function fakeFetch(
   };
 }
 
+/** A fetch mock that routes by URL substring (for multi-endpoint resolution paths). */
+function routedFetch(routes: Array<{ match: string; status?: number; payload: unknown }>) {
+  return (async (url: string) => {
+    const r = routes.find((x) => url.includes(x.match));
+    if (!r) return { ok: false, status: 404, text: async () => `no route for ${url}` };
+    const status = r.status ?? 200;
+    const text = typeof r.payload === 'string' ? r.payload : JSON.stringify(r.payload);
+    return { ok: status >= 200 && status < 300, status, text: async () => text };
+  }) as never;
+}
+
+const CTX_CFG: ProxyConfig = {
+  ...BASE_CFG,
+  runContext: { ...BASE_CFG.runContext, projectId: 'p' },
+};
+
 describe('resolveProjectId', () => {
   it('uses the env-provided projectId without any fetch', async () => {
     let called = false;
@@ -140,6 +159,130 @@ describe('resolveProjectId', () => {
     await expect(resolveProjectId(BASE_CFG, f)).rejects.toThrow(
       /cannot resolve projectId.*HTTP 403/,
     );
+  });
+
+  it("prefers the run issue's projectId over the company project list", async () => {
+    const f = routedFetch([
+      { match: '/api/issues/iss-1', payload: { id: 'iss-1', projectId: 'p-issue' } },
+      { match: '/api/companies/c/projects', payload: { projects: [{ id: 'p-other' }] } },
+    ]);
+    expect(await resolveProjectId({ ...BASE_CFG, taskIssueId: 'iss-1' }, f)).toBe('p-issue');
+  });
+
+  it('falls back to project.id when the issue has no flat projectId', async () => {
+    const f = routedFetch([
+      { match: '/api/issues/iss-2', payload: { id: 'iss-2', project: { id: 'p-nested' } } },
+    ]);
+    expect(await resolveProjectId({ ...BASE_CFG, taskIssueId: 'iss-2' }, f)).toBe('p-nested');
+  });
+
+  it('falls back to the first company project when the issue has no project', async () => {
+    const f = routedFetch([
+      { match: '/api/issues/iss-3', payload: { id: 'iss-3', projectId: null, project: null } },
+      { match: '/api/companies/c/projects', payload: { projects: [{ id: 'p-first' }] } },
+    ]);
+    expect(await resolveProjectId({ ...BASE_CFG, taskIssueId: 'iss-3' }, f)).toBe('p-first');
+  });
+});
+
+describe('resolveProjectContext', () => {
+  it('resolves repoUrl + defaultRef from codebase and the engineer agent', async () => {
+    const f = routedFetch([
+      {
+        match: '/api/projects/p',
+        payload: { codebase: { repoUrl: 'https://github.com/o/r.git', defaultRef: 'main' } },
+      },
+      {
+        match: '/api/companies/c/agents',
+        payload: [
+          { id: 'mo', role: 'cto' },
+          { id: 'eng', role: 'engineer' },
+        ],
+      },
+    ]);
+    expect(await resolveProjectContext(CTX_CFG, f)).toEqual({
+      projectId: 'p',
+      repoUrl: 'https://github.com/o/r.git',
+      defaultRef: 'main',
+      engineerAgentId: 'eng',
+    });
+  });
+
+  it('falls back to primaryWorkspace.repoUrl and leaves engineer undefined when none', async () => {
+    const f = routedFetch([
+      {
+        match: '/api/projects/p',
+        payload: {
+          codebase: { repoUrl: null },
+          primaryWorkspace: { repoUrl: 'https://gh/o/r2.git' },
+        },
+      },
+      { match: '/api/companies/c/agents', payload: { agents: [{ id: 'mo', role: 'cto' }] } },
+    ]);
+    const ctx = await resolveProjectContext(CTX_CFG, f);
+    expect(ctx.repoUrl).toBe('https://gh/o/r2.git');
+    expect(ctx.engineerAgentId).toBeUndefined();
+  });
+
+  it('caches the context (second call does not refetch)', async () => {
+    const f = routedFetch([
+      { match: '/api/projects/p', payload: { codebase: { repoUrl: 'u' } } },
+      { match: '/api/companies/c/agents', payload: [{ id: 'eng', role: 'engineer' }] },
+    ]);
+    await resolveProjectContext(CTX_CFG, f);
+    const ctx2 = await resolveProjectContext(CTX_CFG, (async () => {
+      throw new Error('should not refetch');
+    }) as never);
+    expect(ctx2.engineerAgentId).toBe('eng');
+  });
+});
+
+describe('resolveRepoUrl / resolveEngineerAgentId', () => {
+  it('returns the explicit repoUrl without any fetch', async () => {
+    const url = await resolveRepoUrl(CTX_CFG, 'https://github.com/o/explicit.git', (async () => {
+      throw new Error('should not fetch');
+    }) as never);
+    expect(url).toBe('https://github.com/o/explicit.git');
+  });
+
+  it('resolves repoUrl from project context when omitted', async () => {
+    const f = routedFetch([
+      {
+        match: '/api/projects/p',
+        payload: { codebase: { repoUrl: 'https://github.com/o/r.git' } },
+      },
+      { match: '/api/companies/c/agents', payload: [] },
+    ]);
+    expect(await resolveRepoUrl(CTX_CFG, undefined, f)).toBe('https://github.com/o/r.git');
+  });
+
+  it('throws a precise error when no repo is bound', async () => {
+    const f = routedFetch([
+      { match: '/api/projects/p', payload: { codebase: { repoUrl: null } } },
+      { match: '/api/companies/c/agents', payload: [] },
+    ]);
+    await expect(resolveRepoUrl(CTX_CFG, undefined, f)).rejects.toThrow(/no repo bound/);
+  });
+
+  it('returns the explicit assignee, else resolves the engineer', async () => {
+    expect(
+      await resolveEngineerAgentId(CTX_CFG, 'explicit-agent', (async () => {
+        throw new Error('should not fetch');
+      }) as never),
+    ).toBe('explicit-agent');
+    const f = routedFetch([
+      { match: '/api/projects/p', payload: { codebase: { repoUrl: 'u' } } },
+      { match: '/api/companies/c/agents', payload: [{ id: 'eng', role: 'engineer' }] },
+    ]);
+    expect(await resolveEngineerAgentId(CTX_CFG, undefined, f)).toBe('eng');
+  });
+
+  it('throws when no engineer agent exists', async () => {
+    const f = routedFetch([
+      { match: '/api/projects/p', payload: {} },
+      { match: '/api/companies/c/agents', payload: [{ id: 'mo', role: 'cto' }] },
+    ]);
+    await expect(resolveEngineerAgentId(CTX_CFG, undefined, f)).rejects.toThrow(/role "engineer"/);
   });
 });
 

@@ -19,6 +19,8 @@ import {
   createChildIssue,
   getIssue,
   parseGitHubRepo,
+  resolveRepoUrl,
+  resolveEngineerAgentId,
   REPORT_STATUSES,
   type SandboxToolName,
 } from './proxy.js';
@@ -54,7 +56,16 @@ async function call(toolName: SandboxToolName, parameters: Record<string, unknow
     return textResult((err as Error).message, true);
   }
   try {
-    const r = await executeSandboxTool(cfg, toolName, parameters);
+    const params: Record<string, unknown> = { ...parameters };
+    // B1: the sandbox tools need a repoUrl. If the agent omitted it, resolve the repo
+    // bound to the run's project so the orchestrator need not know it (and can't drift).
+    if (
+      (toolName === 'sandbox_run' || toolName === 'sandbox_code_task') &&
+      !String(params.repoUrl ?? '').trim()
+    ) {
+      params.repoUrl = await resolveRepoUrl(cfg);
+    }
+    const r = await executeSandboxTool(cfg, toolName, params);
     const data = r.data == null ? '' : `\n\n${JSON.stringify(r.data, null, 2)}`;
     return textResult(`${r.content}${data}`);
   } catch (err) {
@@ -74,7 +85,10 @@ export function createServer(): McpServer {
         .describe(
           'Stable id scoping Sprite reuse, tied to repo + role (e.g. "audit-GRA-12"). Same key reuses the same microVM.',
         ),
-      repoUrl: z.string().describe('Git URL to clone (per project).'),
+      repoUrl: z
+        .string()
+        .optional()
+        .describe('Git URL to clone. Optional — defaults to the repo bound to your project.'),
       ref: z.string().describe('Branch name or commit SHA to check out before running.'),
       command: z
         .string()
@@ -95,7 +109,10 @@ export function createServer(): McpServer {
       sandboxKey: z
         .string()
         .describe('Stable id scoping Sprite reuse (tie to repo + issue, e.g. "eng-GRA-12").'),
-      repoUrl: z.string().describe('Git URL to clone (per project).'),
+      repoUrl: z
+        .string()
+        .optional()
+        .describe('Git URL to clone. Optional — defaults to the repo bound to your project.'),
       baseBranch: z
         .string()
         .optional()
@@ -165,7 +182,12 @@ export function createServer(): McpServer {
     'get_diff',
     'Review code changes: return the unified diff between two git refs of a repo (e.g. base "main" vs a branch a sandbox_code_task pushed). Read-only. Use this to inspect what was changed before opening or approving a PR.',
     {
-      repoUrl: z.string().describe('Git URL of the repo (e.g. https://github.com/org/repo.git).'),
+      repoUrl: z
+        .string()
+        .optional()
+        .describe(
+          'Git URL of the repo (e.g. https://github.com/org/repo.git). Optional — defaults to the repo bound to your project.',
+        ),
       base: z.string().describe('Base ref to compare from (e.g. "main").'),
       head: z.string().describe('Head ref to compare to (e.g. the branch that was pushed).'),
       maxBytes: z
@@ -175,8 +197,15 @@ export function createServer(): McpServer {
     },
     (args) =>
       withAudit('get_diff', 'review', async () => {
+        let cfg;
         try {
-          return textResult(await getDiff(args));
+          cfg = readProxyConfig();
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+        try {
+          const repoUrl = await resolveRepoUrl(cfg, args.repoUrl);
+          return textResult(await getDiff({ ...args, repoUrl }));
         } catch (err) {
           return textResult((err as Error).message, true);
         }
@@ -187,7 +216,12 @@ export function createServer(): McpServer {
     'open_pr',
     'Open a GitHub pull request for a branch that a sandbox_code_task pushed. The durable result of the engineer loop. Merging stays a human decision — this only opens the PR. Returns the PR number and URL.',
     {
-      repoUrl: z.string().describe('Git URL of the repo (e.g. https://github.com/org/repo.git).'),
+      repoUrl: z
+        .string()
+        .optional()
+        .describe(
+          'Git URL of the repo (e.g. https://github.com/org/repo.git). Optional — defaults to the repo bound to your project.',
+        ),
       head: z.string().describe('The branch to open the PR from (the pushed branch).'),
       base: z.string().optional().describe('The branch to merge into (default "main").'),
       title: z.string().describe('PR title.'),
@@ -195,8 +229,15 @@ export function createServer(): McpServer {
     },
     (args) =>
       withAudit('open_pr', 'governance', async () => {
+        let cfg;
         try {
-          const r = await openPr(args);
+          cfg = readProxyConfig();
+        } catch (err) {
+          return textResult((err as Error).message, true);
+        }
+        try {
+          const repoUrl = await resolveRepoUrl(cfg, args.repoUrl);
+          const r = await openPr({ ...args, repoUrl });
           // Lifecycle: the evolution reached a reviewable PR (Gate 3).
           await emitEvolution('backoffice.evolution.pr_opened', {
             number: r.number,
@@ -207,7 +248,7 @@ export function createServer(): McpServer {
           // (Gate 3). Never let a notify failure fail the tool — the PR is the result.
           let notified = false;
           try {
-            const { owner, repo } = parseGitHubRepo(args.repoUrl);
+            const { owner, repo } = parseGitHubRepo(repoUrl);
             const scope = resolveNotifyScope(`${owner}/${repo}`);
             notified = await emitNotify({
               text: `🔍 PR #${r.number} needs review: ${args.title}\n${r.url}`,
@@ -233,7 +274,10 @@ export function createServer(): McpServer {
     {
       title: z.string().describe('Short title of the step.'),
       description: z.string().optional().describe('What the assignee must do for this step.'),
-      assigneeAgentId: z.string().describe('Agent id to assign the step to (e.g. the Engineer).'),
+      assigneeAgentId: z
+        .string()
+        .optional()
+        .describe('Agent id to assign the step to. Optional — defaults to the Engineer agent.'),
       acceptanceCriteria: z
         .array(z.string())
         .optional()
@@ -252,12 +296,14 @@ export function createServer(): McpServer {
           return textResult((err as Error).message, true);
         }
         try {
-          const r = await createChildIssue(cfg, args);
+          // B1: default the assignee to the project/company Engineer when omitted.
+          const assigneeAgentId = await resolveEngineerAgentId(cfg, args.assigneeAgentId);
+          const r = await createChildIssue(cfg, { ...args, assigneeAgentId });
           // Lifecycle: a new evolution step was decomposed under the current issue.
           await emitEvolution('backoffice.evolution.step_created', {
             childId: r.id,
             childIdentifier: r.identifier,
-            assigneeAgentId: args.assigneeAgentId,
+            assigneeAgentId,
             title: args.title,
           });
           return textResult(
