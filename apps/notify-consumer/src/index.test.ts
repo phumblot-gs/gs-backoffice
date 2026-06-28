@@ -42,6 +42,19 @@ describe('webhookForScope', () => {
     expect(webhookForScope(null, webhooks)?.channel).toBe('general');
   });
 
+  it('routes scope leadership to the leadership channel, falling back to general', () => {
+    expect(
+      webhookForScope('leadership', { leadership: 'https://lead', general: 'https://gen' }),
+    ).toEqual({
+      url: 'https://lead',
+      channel: 'leadership',
+    });
+    expect(webhookForScope('leadership', { general: 'https://gen' })).toEqual({
+      url: 'https://gen',
+      channel: 'general',
+    });
+  });
+
   it('returns null when nothing is configured (degrade gracefully)', () => {
     expect(webhookForScope('sales', {})).toBeNull();
   });
@@ -129,5 +142,9 @@ describe('renderMessage', () => {
   it('subscribes to the approval lifecycle + generic notify', () => {
     expect(SUBSCRIBED_EVENT_TYPES).toContain('backoffice.approval.requested');
     expect(SUBSCRIBED_EVENT_TYPES).toContain('backoffice.notify.google_chat');
+  });
+
+  it('does NOT subscribe to backoffice.budget.snapshot (BI data, not a chat notif — GRA-42 Step 3)', () => {
+    expect(SUBSCRIBED_EVENT_TYPES).not.toContain('backoffice.budget.snapshot');
   });
 });

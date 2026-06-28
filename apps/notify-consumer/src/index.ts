@@ -10,7 +10,9 @@ const EVT_API_KEY = process.env.EVT_API_KEY;
 const QUEUE_NAME = process.env.NOTIFY_QUEUE_NAME ?? 'backoffice-notify';
 
 // Event types the consumer renders into Google Chat messages. Add more here as
-// other agents start publishing notify-worthy events.
+// other agents start publishing notify-worthy events. NOTE: backoffice.budget.snapshot is
+// deliberately NOT subscribed — it is BI/analytics data (every agent+project), not a chat
+// notification (GRA-42 Step 3).
 export const SUBSCRIBED_EVENT_TYPES = [
   'backoffice.approval.requested',
   'backoffice.approval.decided',
@@ -20,7 +22,10 @@ export const SUBSCRIBED_EVENT_TYPES = [
 /**
  * Webhook routing map (one Google Chat channel per scope), supplied as a JSON
  * object in the GOOGLE_CHAT_WEBHOOKS secret, e.g.
- *   {"general":"https://chat.googleapis.com/...","finance":"https://chat.googleapis.com/..."}
+ *   {"general":"https://chat.googleapis.com/...","leadership":"https://chat.googleapis.com/...","finance":"https://chat.googleapis.com/..."}
+ * Routing is data-driven: any scope is looked up by name (lowercased), falling back to
+ * `general`. The budget plugin (GRA-42) publishes scope `leadership` → add a `leadership`
+ * key to this secret to route Henri budget alerts to the Leadership channel.
  * Editing this one secret value adds/changes channels — no task-def change needed.
  */
 export function parseWebhooks(raw: string | undefined): Record<string, string> {

@@ -6,6 +6,7 @@ import {
   resolveCompanyAccess,
   resolveAccessibleCompanies,
   canApprove,
+  canManageBudget,
   notifyScopeForRepo,
   RBACConfigSchema,
   PerCompanyRBACConfigSchema,
@@ -266,5 +267,42 @@ describe('notifyScopeForRepo', () => {
       if (wf.includes('*')) continue; // leadership
       expect(wf, `${name} must not list request_evolution`).not.toContain('request_evolution');
     }
+  });
+});
+
+describe('canManageBudget (budget gate)', () => {
+  const config = PerCompanyRBACConfigSchema.parse(
+    JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../../config/rbac.json', import.meta.url)), 'utf8'),
+    ),
+  );
+
+  // Budget management is reserved to leadership via the `paperclip.budget` permission.
+  const allowed = ['Management Team', 'Comex'];
+  const denied = ['Sales', 'Customer Success', 'DevOps', 'DevProduct', 'All Users'];
+
+  for (const group of allowed) {
+    it(`allows '${group}' (leadership) to manage budgets`, () => {
+      const access = resolveCompanyAccess(config, 'grafmaker', [group]);
+      expect(canManageBudget(access)).toBe(true);
+    });
+  }
+
+  for (const group of denied) {
+    it(`denies '${group}' budget management`, () => {
+      const access = resolveCompanyAccess(config, 'grafmaker', [group]);
+      expect(canManageBudget(access)).toBe(false);
+    });
+  }
+
+  it('superuser (* permission) always passes; a plain reader does not', () => {
+    const access = (permissions: string[]): ResolvedAccess => ({
+      permissions,
+      scopes: {},
+      workflows: [],
+      agents: [],
+    });
+    expect(canManageBudget(access(['*']))).toBe(true);
+    expect(canManageBudget(access(['paperclip.read']))).toBe(false);
   });
 });

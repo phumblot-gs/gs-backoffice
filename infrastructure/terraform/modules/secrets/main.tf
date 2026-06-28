@@ -19,6 +19,7 @@ resource "aws_secretsmanager_secret_version" "app" {
     EVT_API_KEY             = "CHANGE_ME"
     EVT_ACCOUNT_ID          = "CHANGE_ME"
     PAPERCLIP_API_URL       = "http://localhost:3100"
+    PAPERCLIP_API_KEY       = "CHANGE_ME"
     PAPERCLIP_COMPANY_ID    = "CHANGE_ME"
     CHIEF_OF_STAFF_AGENT_ID = "CHANGE_ME"
     JUMPCLOUD_API_KEY       = "CHANGE_ME"

@@ -13,6 +13,7 @@ import { createHenriMcpServer } from './server.js';
 import { PluginManager } from './plugins/manager.js';
 import { NotionPlugin } from './plugins/notion/index.js';
 import { PaperclipPlugin } from './plugins/paperclip/index.js';
+import { BudgetPlugin } from './plugins/budget/index.js';
 import { RBACResolver } from './auth/rbac.js';
 import {
   createHenriAuth,
@@ -107,6 +108,7 @@ async function initializePlugins() {
   const pluginConfig = { credentials, evtClient, logger };
   await pluginManager.register(new NotionPlugin(), pluginConfig);
   await pluginManager.register(new PaperclipPlugin(), pluginConfig);
+  await pluginManager.register(new BudgetPlugin(), pluginConfig);
 
   logger.info(
     { plugins: pluginManager.getAllTools().map((t) => t.name) },
