@@ -10,7 +10,9 @@ const EVT_API_KEY = process.env.EVT_API_KEY;
 const QUEUE_NAME = process.env.NOTIFY_QUEUE_NAME ?? 'backoffice-notify';
 
 // Event types the consumer renders into Google Chat messages. Add more here as
-// other agents start publishing notify-worthy events.
+// other agents start publishing notify-worthy events. NOTE: backoffice.budget.snapshot is
+// deliberately NOT subscribed — it is BI/analytics data (every agent+project), not a chat
+// notification (GRA-42 Step 3).
 export const SUBSCRIBED_EVENT_TYPES = [
   'backoffice.approval.requested',
   'backoffice.approval.decided',

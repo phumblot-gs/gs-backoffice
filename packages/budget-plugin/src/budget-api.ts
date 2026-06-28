@@ -12,7 +12,7 @@
  * patch (docker/patches/patch-paperclip-plugin-env.mjs). No secret values live in code.
  *
  * All reads are best-effort: any missing config or transport error resolves to `null`
- * so the caller (the alert-poll job) never throws.
+ * so the caller (the alert-poll / snapshot jobs) never throws.
  */
 
 // Mirrors @paperclipai/shared `BudgetOverview` (pinned 2026.609.0). Kept local so the
@@ -34,6 +34,8 @@ export interface BudgetPolicySummary {
   status: BudgetStatus;
   paused: boolean;
   pauseReason: string | null;
+  /** Budget window kind for this policy (e.g. `calendar_month_utc`, `lifetime`). */
+  windowKind?: string;
   windowStart?: string;
   windowEnd?: string;
 }
@@ -56,6 +58,29 @@ export interface BudgetOverview {
   pausedAgentCount: number;
   pausedProjectCount: number;
   pendingApprovalCount?: number;
+}
+
+// Cost breakdowns (GRA-42 Step 3): spend for ALL agents/projects, including scopes with
+// NO budget policy. Amounts are integer cents. Mirrors the costs/by-agent + costs/by-project
+// responses; the snapshot builder merges these with the overview policies.
+export interface AgentCost {
+  agentId: string;
+  agentName: string;
+  spentCents: number;
+}
+
+export interface ProjectCost {
+  projectId: string;
+  projectName: string;
+  spentCents: number;
+}
+
+export interface CostsByAgentResponse {
+  agents: AgentCost[];
+}
+
+export interface CostsByProjectResponse {
+  projects: ProjectCost[];
 }
 
 export interface BudgetApiConfig {
@@ -84,10 +109,10 @@ export class BudgetApiClient {
     private readonly fetchImpl: FetchLike = fetch as unknown as FetchLike,
   ) {}
 
-  /** GET /api/companies/:companyId/budgets/overview — typed, best-effort (null on any failure). */
-  async getBudgetsOverview(): Promise<BudgetOverview | null> {
+  /** Authenticated GET returning parsed JSON, or null on any failure (best-effort). */
+  private async getJson<T>(path: string): Promise<T | null> {
     const { apiUrl, apiKey, companyId } = this.config;
-    const url = `${apiUrl}/api/companies/${companyId}/budgets/overview`;
+    const url = `${apiUrl}/api/companies/${companyId}${path}`;
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     try {
@@ -95,9 +120,34 @@ export class BudgetApiClient {
       if (!res.ok) return null;
       const text = await res.text();
       if (!text) return null;
-      return JSON.parse(text) as BudgetOverview;
+      return JSON.parse(text) as T;
     } catch {
       return null;
     }
+  }
+
+  /** GET /api/companies/:companyId/budgets/overview — typed, best-effort (null on any failure). */
+  async getBudgetsOverview(): Promise<BudgetOverview | null> {
+    return this.getJson<BudgetOverview>('/budgets/overview');
+  }
+
+  /**
+   * GET /api/companies/:companyId/costs/by-agent — spend for EVERY agent (budgeted or not).
+   * Tolerates either a bare array or a `{ agents: [...] }` envelope. Best-effort (null on failure).
+   */
+  async getCostsByAgent(): Promise<AgentCost[] | null> {
+    const raw = await this.getJson<CostsByAgentResponse | AgentCost[]>('/costs/by-agent');
+    if (!raw) return null;
+    return Array.isArray(raw) ? raw : (raw.agents ?? []);
+  }
+
+  /**
+   * GET /api/companies/:companyId/costs/by-project — spend for EVERY project (budgeted or not).
+   * Tolerates either a bare array or a `{ projects: [...] }` envelope. Best-effort (null on failure).
+   */
+  async getCostsByProject(): Promise<ProjectCost[] | null> {
+    const raw = await this.getJson<CostsByProjectResponse | ProjectCost[]>('/costs/by-project');
+    if (!raw) return null;
+    return Array.isArray(raw) ? raw : (raw.projects ?? []);
   }
 }

@@ -3,6 +3,8 @@ import type { ToolResult } from '@paperclipai/plugin-sdk';
 import { BudgetApiClient, readBudgetApiConfig } from './budget-api.js';
 import { buildAlertMessage, collectAlerts, diffAlerts, type NotifiedState } from './alerts.js';
 import { emitLeadershipChatNotify } from './notify.js';
+import { buildSnapshotPayload } from './snapshot.js';
+import { emitBudgetSnapshot } from './snapshot-emit.js';
 
 /** Stub tool result this step — real logic lands in GRA-42 Steps 2–4. */
 const notImplemented = (tool: string, step: string): ToolResult => ({
@@ -118,12 +120,53 @@ const plugin = definePlugin({
         ctx.logger.warn(`budget-alert-poll: failed (best-effort, ignored): ${String(err)}`);
       }
     });
-    // budget-snapshot remains a stub until GRA-42 Step 3 (daily snapshot, NOT a chat notif).
+    // budget-snapshot (GRA-42 Step 3): once daily, read budgets/overview + costs/by-agent +
+    // costs/by-project, merge into ONE aggregated snapshot of EVERY agent & project, and emit a
+    // single backoffice.budget.snapshot event (BI data — the notify-consumer does NOT subscribe).
+    // Entirely best-effort — never throws.
     ctx.jobs.register('budget-snapshot', async () => {
-      ctx.logger.info('budget-snapshot: stub (no-op until GRA-42 Step 3)');
+      try {
+        const config = readBudgetApiConfig(process.env);
+        if (!config) {
+          ctx.logger.warn(
+            'budget-snapshot: PAPERCLIP_API_URL/PAPERCLIP_COMPANY_ID not in worker env — skipping (see ADAPTER_ENV_PASSTHROUGH patch).',
+          );
+          return;
+        }
+        const client = new BudgetApiClient(config);
+        const [overview, costsByAgent, costsByProject] = await Promise.all([
+          client.getBudgetsOverview(),
+          client.getCostsByAgent(),
+          client.getCostsByProject(),
+        ]);
+        if (!overview) {
+          ctx.logger.warn('budget-snapshot: budgets/overview unavailable — skipping this run.');
+          return;
+        }
+        // reportDate = today UTC (YYYY-MM-DD); window = the company budget window from overview.
+        const reportDate = new Date().toISOString().slice(0, 10);
+        const companyPolicy = (overview.policies ?? []).find((p) => p.scopeType === 'company');
+        const window = {
+          windowStart: companyPolicy?.windowStart ?? null,
+          windowEnd: companyPolicy?.windowEnd ?? null,
+        };
+        const payload = buildSnapshotPayload({
+          overview,
+          costsByAgent,
+          costsByProject,
+          reportDate,
+          window,
+        });
+        const sent = await emitBudgetSnapshot(payload, process.env);
+        ctx.logger.info(
+          `budget-snapshot: ${payload.agents.length} agent(s), ${payload.projects.length} project(s) for ${reportDate} — ${sent ? 'emitted backoffice.budget.snapshot' : 'EVT publish skipped/failed (best-effort)'}.`,
+        );
+      } catch (err) {
+        ctx.logger.warn(`budget-snapshot: failed (best-effort, ignored): ${String(err)}`);
+      }
     });
 
-    ctx.logger.info('Henri budget plugin ready (stubs: 3 tools + alert/snapshot jobs)');
+    ctx.logger.info('Henri budget plugin ready (3 tool stubs + alert-poll & snapshot jobs)');
   },
 
   async onHealth() {
