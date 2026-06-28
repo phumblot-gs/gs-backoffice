@@ -37,6 +37,12 @@ resource "aws_secretsmanager_secret_version" "app" {
     SANDBOX_GITHUB_TOKEN      = "CHANGE_ME"
     SANDBOX_GITHUB_READ_TOKEN = "CHANGE_ME"
     SANDBOX_GITHUB_PUSH_TOKEN = "CHANGE_ME"
+    # GitHub App "GRAFMAKER Henri": the bridge mints short-lived installation tokens so
+    # PRs are bot-authored (author != approver, SOC2 CC8). Set out-of-band via
+    # ~/gs-set-github-app.sh. Placeholder/absent → bridge falls back to the PATs above.
+    GITHUB_APP_ID              = "CHANGE_ME"
+    GITHUB_APP_INSTALLATION_ID = "CHANGE_ME"
+    GITHUB_APP_PRIVATE_KEY     = "CHANGE_ME"
     # Stable key for Paperclip's local_encrypted secret store, so company secrets
     # survive redeploys on ephemeral Fargate (entrypoint writes it to master.key).
     PAPERCLIP_SECRETS_MASTER_KEY = "CHANGE_ME"

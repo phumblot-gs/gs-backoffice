@@ -14,6 +14,7 @@
  * See docs/architecture/methods-officer-self-evolution.md (§10) and
  * docs/architecture/sandbox-code-tool.md.
  */
+import { resolveGitHubToken } from './github-app.js';
 
 /** The deployed sandbox plugin whose tools we proxy to. */
 export const SANDBOX_PLUGIN_ID = 'gs-backoffice.fly-sprites-sandbox-provider';
@@ -498,7 +499,7 @@ export async function openPr(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ number: number; url: string }> {
   const { owner, repo } = parseGitHubRepo(input.repoUrl);
-  const token = githubToken('push', env);
+  const token = await resolveGitHubToken({ patFallback: () => githubToken('push', env), env });
   const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
   const res = await fetchImpl(url, {
     method: 'POST',
@@ -525,7 +526,7 @@ export async function getDiff(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const { owner, repo } = parseGitHubRepo(input.repoUrl);
-  const token = githubToken('read', env);
+  const token = await resolveGitHubToken({ patFallback: () => githubToken('read', env), env });
   const range = `${encodeURIComponent(input.base)}...${encodeURIComponent(input.head)}`;
   const url = `${GITHUB_API}/repos/${owner}/${repo}/compare/${range}`;
   const res = await fetchImpl(url, {
