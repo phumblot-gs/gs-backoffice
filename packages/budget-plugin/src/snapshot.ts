@@ -12,7 +12,13 @@
  * integer cents. `currency` is the literal "USD" (per spec). The job passes `reportDate`
  * and `window` in so this stays a pure, unit-testable function.
  */
-import type { AgentCost, BudgetOverview, BudgetPolicySummary, BudgetStatus, ProjectCost } from './budget-api.js';
+import type {
+  AgentCost,
+  BudgetOverview,
+  BudgetPolicySummary,
+  BudgetStatus,
+  ProjectCost,
+} from './budget-api.js';
 
 export interface SnapshotWindow {
   windowStart: string | null;
