@@ -69,6 +69,54 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
 }
 
 # -----------------------------------------------------------------------------
+# Application-level alarm: scheduled-job failures
+#
+# The infra alarms above (CPU, 5xx) only see the container. They cannot see a
+# scheduled job that fails while the service stays perfectly healthy — which is
+# exactly how the PR-review digest ran on a dead GitHub token for weeks while
+# still posting a cheerful "aucune PR en attente" to Google Chat every morning.
+#
+# Jobs now log the JOB_FAILURE_MARKER string (see
+# packages/sandbox-fly-sprites/src/tools.ts). This filter counts it and alarms on
+# the first occurrence. The marker and the pattern below must stay in sync.
+# -----------------------------------------------------------------------------
+locals {
+  job_failure_marker = "BACKOFFICE_JOB_FAILURE"
+  metric_namespace   = "GsBackoffice/${var.environment}"
+}
+
+resource "aws_cloudwatch_log_metric_filter" "job_failure" {
+  name           = "${var.project_name}-${var.environment}-job-failure"
+  log_group_name = var.paperclip_log_group_name
+  pattern        = "\"${local.job_failure_marker}\""
+
+  metric_transformation {
+    name      = "JobFailures"
+    namespace = local.metric_namespace
+    value     = "1"
+    # Emit 0 on non-matching events so the metric always reports and the alarm
+    # can return to OK on its own instead of sitting in INSUFFICIENT_DATA.
+    default_value = "0"
+    unit          = "Count"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "job_failure" {
+  alarm_name          = "${var.project_name}-${var.environment}-job-failure"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = aws_cloudwatch_log_metric_filter.job_failure.metric_transformation[0].name
+  namespace           = local.metric_namespace
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  alarm_description   = "A gs-backoffice scheduled job reported a failure (${local.job_failure_marker}) - e.g. the PR-review digest could not reach GitHub."
+  alarm_actions       = [aws_sns_topic.alerts.arn]
+  ok_actions          = [aws_sns_topic.alerts.arn]
+  treat_missing_data  = "notBreaching"
+}
+
+# -----------------------------------------------------------------------------
 # CloudWatch Dashboard
 # -----------------------------------------------------------------------------
 resource "aws_cloudwatch_dashboard" "main" {
@@ -138,6 +186,22 @@ resource "aws_cloudwatch_dashboard" "main" {
           ]
           region = var.aws_region
           period = 300
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 12
+        width  = 24
+        height = 6
+        properties = {
+          title = "Scheduled job failures (application)"
+          metrics = [
+            [local.metric_namespace, "JobFailures", { label = "Job failures", stat = "Sum", color = "#d62728" }],
+          ]
+          region = var.aws_region
+          period = 300
+          yAxis  = { left = { min = 0 } }
         }
       },
     ]

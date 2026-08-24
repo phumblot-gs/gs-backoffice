@@ -45,3 +45,8 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+variable "paperclip_log_group_name" {
+  description = "CloudWatch log group holding the Paperclip / plugin-worker logs (source of the job-failure metric filter)"
+  type        = string
+}
