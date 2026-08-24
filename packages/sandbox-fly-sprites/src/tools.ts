@@ -2,7 +2,18 @@ import type { PluginContext, ToolResult, ScopeKey } from '@paperclipai/plugin-sd
 import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
-import { runPrReviewDigest } from './digest.js';
+import { runPrReviewDigest, emitChatNotify } from './digest.js';
+
+/**
+ * Stable marker logged whenever a scheduled job cannot do its job.
+ *
+ * The CloudWatch metric filter and alarm in
+ * `infrastructure/terraform/modules/monitoring/main.tf` count occurrences of this
+ * exact string, so it must not change without updating the Terraform pattern.
+ * Infra alarms (CPU, 5xx) cannot see a job that fails while the service stays
+ * healthy — this marker is what makes that visible.
+ */
+export const JOB_FAILURE_MARKER = 'BACKOFFICE_JOB_FAILURE';
 
 /** Fly Sprite names must be lowercase alphanumeric + hyphens. Derive a stable,
  *  collision-resistant name from the caller's `sandboxKey`. Pure (testable). */
@@ -431,17 +442,34 @@ export function registerSandboxTools(ctx: PluginContext): void {
   });
 
   // PR-review digest: weekday-morning summary of open PRs awaiting review → Google Chat.
+  // A digest that cannot do its job must say so — on Chat AND in the logs. It used to
+  // swallow per-repo errors and still post "aucune PR en attente", which is how a dead
+  // GitHub token went unnoticed for weeks.
   ctx.jobs.register('pr-review-digest', async () => {
     const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
     const token =
       envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN') ??
       envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
     if (!token) {
-      ctx.logger.warn('pr-review-digest: no GitHub read token, skipping');
+      ctx.logger.error(`${JOB_FAILURE_MARKER} pr-review-digest: no GitHub read token`, {
+        expected: 'SANDBOX_GITHUB_READ_TOKEN or SANDBOX_GITHUB_TOKEN',
+      });
+      await emitChatNotify(
+        "🚨 Digest PR indisponible : aucun token GitHub en lecture n'est configuré. Le statut des revues est INCONNU.",
+        'general',
+        process.env,
+      );
       return;
     }
     const rbacPath = (process.env.GS_RBAC_PATH || '/opt/gs-agent-tools/rbac.json').trim();
     const res = await runPrReviewDigest({ rbacPath, token, env: process.env, logger: ctx.logger });
-    ctx.logger.info('pr-review-digest: posted', res);
+    if (res.failed.length > 0) {
+      ctx.logger.error(
+        `${JOB_FAILURE_MARKER} pr-review-digest: ${res.failed.length} source(s) unreachable`,
+        { ...res },
+      );
+      return;
+    }
+    ctx.logger.info('pr-review-digest: posted', { ...res });
   });
 }

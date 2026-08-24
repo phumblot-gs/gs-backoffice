@@ -8,6 +8,7 @@ import {
   buildDigestText,
   emitChatNotify,
   runPrReviewDigest,
+  summarizeError,
   type ReviewPr,
 } from './digest.js';
 
@@ -80,6 +81,32 @@ describe('buildDigestText', () => {
     expect(t).toContain('1 PR(s)');
     expect(t).toContain('<http://x/7|#7>');
   });
+
+  it('never claims all-clear when a source failed — says the status is unknown', () => {
+    const t = buildDigestText([], [{ repo: 'o/r', error: 'HTTP 401: Bad credentials' }]);
+    expect(t).not.toMatch(/aucune PR/);
+    expect(t).toContain('INCONNU');
+    expect(t).toContain('o/r — HTTP 401: Bad credentials');
+  });
+
+  it('flags a partial list when some repos answered and others failed', () => {
+    const prs: ReviewPr[] = [
+      { repo: 'o/ok', number: 7, title: 'T', url: 'http://x/7', author: 'a' },
+    ];
+    const t = buildDigestText(prs, [{ repo: 'o/ko', error: 'HTTP 500' }]);
+    expect(t).toContain('incomplet');
+    expect(t).toContain('<http://x/7|#7>');
+    expect(t).toContain('o/ko — HTTP 500');
+  });
+});
+
+describe('summarizeError', () => {
+  it('collapses whitespace and truncates long GitHub bodies', () => {
+    expect(summarizeError(new Error('HTTP 401:\n  {\n  "message": "Bad credentials"\n}'))).toBe(
+      'HTTP 401: { "message": "Bad credentials" }',
+    );
+    expect(summarizeError(new Error('x'.repeat(400)))).toHaveLength(160);
+  });
 });
 
 describe('emitChatNotify (via shared EvtClient)', () => {
@@ -118,13 +145,13 @@ describe('runPrReviewDigest', () => {
       env: EVT_ENV,
       fetchImpl: ghFetch,
     });
-    expect(res).toEqual({ repos: 1, prs: 1, sent: true });
+    expect(res).toEqual({ repos: 1, prs: 1, sent: true, failed: [] });
     expect(ghCalls.some((u) => u.includes('/repos/org/repo/pulls'))).toBe(true);
     expect(evt.url).toBe('https://evt/v1/events');
   });
 
-  it('still posts an all-clear digest when a repo errors', async () => {
-    stubEvtFetch();
+  it('reports the failure instead of an all-clear when a repo errors', async () => {
+    const evt = stubEvtFetch();
     const ghFetch = (async () => ({ ok: false, status: 500, text: async () => 'boom' })) as never;
     const warns: string[] = [];
     const res = await runPrReviewDigest({
@@ -137,5 +164,26 @@ describe('runPrReviewDigest', () => {
     expect(res.prs).toBe(0);
     expect(res.sent).toBe(true);
     expect(warns.length).toBe(1);
+    expect(res.failed).toEqual([{ repo: 'org/repo', error: expect.stringContaining('HTTP 500') }]);
+    // The message that actually reaches Google Chat must not read as "nothing to review".
+    const text = JSON.parse(evt.body as string).payload.text as string;
+    expect(text).not.toMatch(/aucune PR/);
+    expect(text).toContain('INCONNU');
+  });
+
+  it('treats an unreadable rbac.json as a failure, not as an empty all-clear', async () => {
+    const evt = stubEvtFetch();
+    const res = await runPrReviewDigest({
+      rbacPath: '/no/such.json',
+      token: 'tok',
+      env: EVT_ENV,
+      fetchImpl: (async () => ({ ok: true, status: 200, text: async () => '[]' })) as never,
+    });
+    expect(res.repos).toBe(0);
+    expect(res.failed).toEqual([
+      { repo: '(configuration)', error: expect.stringContaining('aucun dépôt configuré') },
+    ]);
+    const text = JSON.parse(evt.body as string).payload.text as string;
+    expect(text).not.toMatch(/aucune PR/);
   });
 });

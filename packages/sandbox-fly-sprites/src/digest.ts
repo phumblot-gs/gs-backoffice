@@ -74,11 +74,39 @@ export async function listOpenReviewPrs(
     }));
 }
 
-/** Render the Google Chat digest text (link syntax `<url|label>`). */
-export function buildDigestText(prs: ReviewPr[]): string {
-  if (prs.length === 0) return '☀️ Bonjour — aucune PR en attente de revue ce matin.';
+/** A repo the digest could not query, with a short chat-safe reason. */
+export interface RepoFailure {
+  repo: string;
+  error: string;
+}
+
+/** Collapse an error into a single short line safe to embed in a Chat message. */
+export function summarizeError(err: unknown): string {
+  const oneLine = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ').trim();
+  return oneLine.length > 160 ? `${oneLine.slice(0, 157)}...` : oneLine;
+}
+
+/**
+ * Render the Google Chat digest text (link syntax `<url|label>`).
+ *
+ * A repo we failed to query must never be reported as "nothing to review": when
+ * anything went wrong the message states the review status is UNKNOWN and lists
+ * what failed. The reassuring all-clear is only ever sent when every configured
+ * repo actually answered.
+ */
+export function buildDigestText(prs: ReviewPr[], failures: RepoFailure[] = []): string {
   const lines = prs.map((p) => `• <${p.url}|#${p.number}> ${p.title} — ${p.author} (${p.repo})`);
-  return `☀️ ${prs.length} PR(s) en attente de revue :\n${lines.join('\n')}`;
+  if (failures.length === 0) {
+    if (prs.length === 0) return '☀️ Bonjour — aucune PR en attente de revue ce matin.';
+    return `☀️ ${prs.length} PR(s) en attente de revue :\n${lines.join('\n')}`;
+  }
+  const header =
+    prs.length === 0
+      ? "🚨 Digest PR indisponible : impossible d'établir la liste des PR en attente. Le statut des revues est INCONNU — ce n'est pas un « rien à revoir »."
+      : `⚠️ Digest PR incomplet : ${prs.length} PR(s) listée(s), mais ${failures.length} source(s) injoignable(s). La liste ci-dessous peut être incomplète.`;
+  const body = prs.length === 0 ? '' : `\n${lines.join('\n')}`;
+  const failLines = failures.map((f) => `• ${f.repo} — ${f.error}`);
+  return `${header}${body}\n\nÉchecs :\n${failLines.join('\n')}`;
 }
 
 /**
@@ -117,20 +145,36 @@ export interface DigestDeps {
   logger?: { warn?: (message: string, meta?: Record<string, unknown>) => void };
 }
 
-/** Run the digest: gather open PRs across configured repos, post the Chat digest. */
+/**
+ * Run the digest: gather open PRs across configured repos, post the Chat digest.
+ *
+ * Every way this can go wrong — an unreadable rbac.json, a repo GitHub refuses —
+ * ends up in `failed` and in the posted message. The caller is expected to log a
+ * `JOB_FAILURE_MARKER` line when `failed` is non-empty (see tools.ts).
+ */
 export async function runPrReviewDigest(
   deps: DigestDeps,
-): Promise<{ repos: number; prs: number; sent: boolean }> {
+): Promise<{ repos: number; prs: number; sent: boolean; failed: RepoFailure[] }> {
   const fetchImpl = deps.fetchImpl ?? (fetch as unknown as FetchLike);
   const repos = Object.keys(readRepoScopes(deps.rbacPath));
-  let all: ReviewPr[] = [];
+  const all: ReviewPr[] = [];
+  const failed: RepoFailure[] = [];
+  // No repo at all means the config never loaded — a silent all-clear would be a lie.
+  if (repos.length === 0) {
+    failed.push({
+      repo: '(configuration)',
+      error: `aucun dépôt configuré — rbac.json illisible ou vide (${deps.rbacPath})`,
+    });
+  }
   for (const repo of repos) {
     try {
-      all = all.concat(await listOpenReviewPrs(repo, deps.token, fetchImpl));
+      all.push(...(await listOpenReviewPrs(repo, deps.token, fetchImpl)));
     } catch (err) {
-      deps.logger?.warn?.('pr-review-digest: repo failed', { repo, error: String(err) });
+      const error = summarizeError(err);
+      failed.push({ repo, error });
+      deps.logger?.warn?.('pr-review-digest: repo failed', { repo, error });
     }
   }
-  const sent = await emitChatNotify(buildDigestText(all), 'general', deps.env);
-  return { repos: repos.length, prs: all.length, sent };
+  const sent = await emitChatNotify(buildDigestText(all, failed), 'general', deps.env);
+  return { repos: repos.length, prs: all.length, sent, failed };
 }
