@@ -21,7 +21,8 @@ COPY . .
 # Then build the workspace deps (tsc → dist) BEFORE the esbuild bundlers, which resolve
 # @gs-backoffice/* from their built dist (the bundlers inline them).
 RUN pnpm install --frozen-lockfile \
-  && pnpm --filter @gs-backoffice/core --filter @gs-backoffice/evt-client build \
+  && pnpm --filter @gs-backoffice/core --filter @gs-backoffice/evt-client \
+          --filter @gs-backoffice/github-app build \
   && pnpm --filter @gs-backoffice/sandbox-fly-sprites \
           --filter @gs-backoffice/budget-plugin \
           --filter @gs-backoffice/agent-sandbox-mcp build
