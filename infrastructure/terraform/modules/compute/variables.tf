@@ -113,3 +113,24 @@ variable "notify_memory" {
   type        = number
   default     = 512
 }
+
+variable "paperclip_disable_signup" {
+  description = <<-EOT
+    Close public account creation on the Paperclip UI. The ALB is internet-facing and
+    `POST /api/auth/sign-up/email` was reachable by anyone: bots registered ~5 accounts
+    a month on staging on their own (they could not sign in — Paperclip's own gate
+    returns 403 — but the rows are real).
+
+    Paperclip 609 exposes no invite-only switch in config.json; `auth.disableSignUp` is
+    the only lever, and invitations go through the same endpoint as public sign-up. So
+    closing this also closes onboarding, by design:
+
+      onboarding runbook — set this to false, apply, send the invite, set it back to
+      true, apply. Two deploys, and the window is auditable in the PR history.
+
+    Also required false when bootstrapping the very first admin on a fresh environment
+    (`paperclipai auth bootstrap-ceo`).
+  EOT
+  type        = bool
+  default     = true
+}
