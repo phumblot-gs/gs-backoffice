@@ -101,4 +101,7 @@ module "monitoring" {
   db_instance_identifier = module.database.db_instance_identifier
   alb_arn_suffix         = module.load_balancer.alb_arn_suffix
   alert_email            = var.alert_email
+
+  paperclip_log_group_name = module.compute.paperclip_log_group_name
+  app_secrets_arn          = module.secrets.app_secrets_arn
 }

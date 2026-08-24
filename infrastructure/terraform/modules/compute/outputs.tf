@@ -17,3 +17,8 @@ output "mcp_service_name" {
   description = "MCP server ECS service name"
   value       = aws_ecs_service.mcp.name
 }
+
+output "paperclip_log_group_name" {
+  description = "CloudWatch log group holding the Paperclip server + plugin-worker logs"
+  value       = aws_cloudwatch_log_group.paperclip.name
+}
