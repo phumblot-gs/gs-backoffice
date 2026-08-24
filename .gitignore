@@ -35,3 +35,6 @@ coverage/
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+
+# Terraform-built Lambda deployment packages
+infrastructure/terraform/modules/**/.build/

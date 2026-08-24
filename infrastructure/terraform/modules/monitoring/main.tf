@@ -207,3 +207,93 @@ resource "aws_cloudwatch_dashboard" "main" {
     ]
   })
 }
+
+# -----------------------------------------------------------------------------
+# Alarm delivery: SNS → Lambda → Google Chat
+#
+# The alerts topic had no subscriber at all, so every alarm above fired into the
+# void. Alerts are posted to Chat DIRECTLY by this Lambda rather than through the
+# usual EVT → notify-consumer path, because the notify-consumer runs on the very
+# ECS cluster these alarms watch — routing alerts through it would go silent
+# exactly when it matters. The function stays outside the VPC so it needs neither
+# the NAT gateway nor a healthy network path through the monitored stack.
+# -----------------------------------------------------------------------------
+data "archive_file" "alarm_forwarder" {
+  type        = "zip"
+  source_file = "${path.module}/../../../lambda/alarm-forwarder/index.mjs"
+  output_path = "${path.module}/.build/alarm-forwarder.zip"
+}
+
+resource "aws_iam_role" "alarm_forwarder" {
+  name = "${var.project_name}-${var.environment}-alarm-forwarder"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "alarm_forwarder" {
+  name = "${var.project_name}-${var.environment}-alarm-forwarder"
+  role = aws_iam_role.alarm_forwarder.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.alarm_forwarder.arn}:*"
+      },
+      {
+        # Only the one secret, only read — the function needs GOOGLE_CHAT_WEBHOOKS.
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = var.app_secrets_arn
+      },
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "alarm_forwarder" {
+  name              = "/aws/lambda/${var.project_name}-${var.environment}-alarm-forwarder"
+  retention_in_days = 30
+}
+
+resource "aws_lambda_function" "alarm_forwarder" {
+  function_name    = "${var.project_name}-${var.environment}-alarm-forwarder"
+  role             = aws_iam_role.alarm_forwarder.arn
+  handler          = "index.handler"
+  runtime          = "nodejs22.x"
+  timeout          = 15
+  filename         = data.archive_file.alarm_forwarder.output_path
+  source_code_hash = data.archive_file.alarm_forwarder.output_base64sha256
+
+  environment {
+    variables = {
+      APP_SECRETS_ARN = var.app_secrets_arn
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.alarm_forwarder]
+}
+
+resource "aws_lambda_permission" "alarm_forwarder_sns" {
+  statement_id  = "AllowExecutionFromSNS"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.alarm_forwarder.function_name
+  principal     = "sns.amazonaws.com"
+  source_arn    = aws_sns_topic.alerts.arn
+}
+
+resource "aws_sns_topic_subscription" "alarm_forwarder" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "lambda"
+  endpoint  = aws_lambda_function.alarm_forwarder.arn
+
+  depends_on = [aws_lambda_permission.alarm_forwarder_sns]
+}

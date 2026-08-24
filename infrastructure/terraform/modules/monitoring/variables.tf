@@ -50,3 +50,8 @@ variable "paperclip_log_group_name" {
   description = "CloudWatch log group holding the Paperclip / plugin-worker logs (source of the job-failure metric filter)"
   type        = string
 }
+
+variable "app_secrets_arn" {
+  description = "ARN of the application secret holding GOOGLE_CHAT_WEBHOOKS (read by the alarm forwarder)"
+  type        = string
+}
