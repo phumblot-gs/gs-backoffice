@@ -1,0 +1,18 @@
+# The image builds from source: everything below is either rebuilt inside the image
+# or has no business in a layer. Without this file `COPY . .` ships the developer's
+# node_modules (whose symlinks point at a pnpm store that does not exist in the
+# image, so `pnpm install` then aborts) and any local .env.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+**/*.tsbuildinfo
+.turbo
+**/.turbo
+infrastructure/terraform/**/.terraform
+infrastructure/terraform/**/.build
