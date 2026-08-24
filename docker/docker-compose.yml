@@ -27,6 +27,9 @@ services:
       SERVE_UI: 'true'
       BETTER_AUTH_SECRET: '${BETTER_AUTH_SECRET:-dev-secret-change-in-production}'
       PAPERCLIP_TELEMETRY_DISABLED: '1'
+      # Local only: the stack is not reachable from the internet and you need an open
+      # sign-up to create the first account. Deployed environments default to closed.
+      PAPERCLIP_DISABLE_SIGNUP: 'false'
     depends_on:
       db:
         condition: service_healthy
