@@ -178,6 +178,17 @@ resource "aws_security_group" "ecs" {
     security_groups = [aws_security_group.alb.id]
   }
 
+  # East-west: the MCP server calls the Paperclip API directly via service
+  # discovery. Without this the only path between two tasks sitting in the same
+  # subnet is out through the NAT gateway and back in via the ALB's public IPs.
+  ingress {
+    description = "Paperclip from other tasks in the cluster (service discovery)"
+    from_port   = 3100
+    to_port     = 3100
+    protocol    = "tcp"
+    self        = true
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
