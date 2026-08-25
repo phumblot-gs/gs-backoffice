@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import { __resetTokenCache } from '@gs-backoffice/github-app';
 import {
   buildGitCredentialSetup,
   buildCheckoutScript,
@@ -12,6 +14,7 @@ import {
   parseSandboxRunParams,
   parseCodeTaskParams,
   reapIdleSandboxes,
+  resolveGitHubCredential,
 } from './tools.js';
 import type { PluginContext } from '@paperclipai/plugin-sdk';
 
@@ -210,5 +213,70 @@ describe('reapIdleSandboxes', () => {
     expect(deletedCalls).toEqual(['sandbox-old']);
     expect(state['sandbox-old']).toBeUndefined(); // state row cleared
     expect(state['sandbox-fresh']).toBeDefined();
+  });
+});
+
+describe('resolveGitHubCredential (App-first credential selection)', () => {
+  const logger = () => {
+    const warns: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+    return {
+      warns,
+      logger: {
+        info: () => {},
+        warn: (msg: string, meta?: Record<string, unknown>) => warns.push({ msg, meta }),
+        error: () => {},
+        debug: () => {},
+      } as unknown as PluginContext['logger'],
+    };
+  };
+
+  afterEach(() => {
+    __resetTokenCache();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function stubApp() {
+    vi.stubEnv('GITHUB_APP_ID', '4168279');
+    vi.stubEnv('GITHUB_APP_INSTALLATION_ID', '111');
+    // Throwaway key generated per-run: the JWT only needs to be signable here.
+    vi.stubEnv(
+      'GITHUB_APP_PRIVATE_KEY',
+      generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+      }).privateKey,
+    );
+  }
+
+  it('prefers the App installation token over the PAT', async () => {
+    stubApp();
+    vi.stubGlobal('fetch', async () => ({
+      ok: true,
+      status: 201,
+      text: async () => JSON.stringify({ token: 'ghs_app', expires_at: null }),
+    }));
+    const { logger: log } = logger();
+    expect(await resolveGitHubCredential(() => 'ghp_pat', log)).toBe('ghs_app');
+  });
+
+  it('falls back to the PAT when no App is configured', async () => {
+    const { logger: log, warns } = logger();
+    expect(await resolveGitHubCredential(() => 'ghp_pat', log)).toBe('ghp_pat');
+    expect(warns).toHaveLength(0);
+  });
+
+  it('degrades to the PAT (with a warning) when minting fails', async () => {
+    stubApp();
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 401, text: async () => 'bad key' }));
+    const { logger: log, warns } = logger();
+    expect(await resolveGitHubCredential(() => 'ghp_pat', log)).toBe('ghp_pat');
+    expect(warns[0]?.msg).toMatch(/falling back to the PAT/);
+  });
+
+  it('returns undefined when neither an App nor a PAT is available', async () => {
+    const { logger: log } = logger();
+    expect(await resolveGitHubCredential(() => undefined, log)).toBeUndefined();
   });
 });

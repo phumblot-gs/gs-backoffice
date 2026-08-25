@@ -14,7 +14,7 @@
  * See docs/architecture/methods-officer-self-evolution.md (§10) and
  * docs/architecture/sandbox-code-tool.md.
  */
-import { resolveGitHubToken } from './github-app.js';
+import { resolveGitHubToken } from '@gs-backoffice/github-app';
 
 /** The deployed sandbox plugin whose tools we proxy to. */
 export const SANDBOX_PLUGIN_ID = 'gs-backoffice.fly-sprites-sandbox-provider';

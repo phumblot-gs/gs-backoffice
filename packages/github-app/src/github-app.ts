@@ -1,13 +1,18 @@
 /**
- * GitHub App identity for the self-evolution bridge (B2).
+ * GitHub App identity — shared by every component that talks to GitHub.
  *
- * The bridge opens PRs (and reads diffs) with a short-lived **installation token**
- * minted from the "GRAFMAKER Henri" GitHub App, so PRs are authored by the bot
- * (`grafmaker-henri[bot]`) — distinct from the human who approves/merges them
- * (SOC 2 CC8, separation of duties). The App credentials live in the container env
- * (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY); when they are
- * absent or still the `CHANGE_ME` placeholder, the bridge falls back to the PATs, so
- * rollout is safe and reversible.
+ * Callers authenticate with a short-lived **installation token** minted from the
+ * "GRAFMAKER Henri" GitHub App rather than a personal access token. For the
+ * self-evolution bridge that means PRs are authored by the bot
+ * (`grafmaker-henri[bot]`), distinct from the human who approves and merges them
+ * (SOC 2 CC8, separation of duties). For everything else it means no long-lived
+ * credential to expire unnoticed — which is exactly how the PR-review digest spent
+ * a month posting "no PRs to review" on the back of a dead PAT.
+ *
+ * The App credentials live in the container env (GITHUB_APP_ID /
+ * GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY); when they are absent or
+ * still the `CHANGE_ME` placeholder, callers fall back to their PAT, so rollout is
+ * safe and reversible.
  *
  * No external dependency: the App JWT is signed with `node:crypto` (RS256).
  */
@@ -94,7 +99,7 @@ export async function mintInstallationToken(
   const { appId, installationId, privateKey } = readAppEnv(env);
   if (!appId || !installationId || !privateKey) {
     throw new Error(
-      'agent-sandbox-mcp: GitHub App env incomplete (need GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY).',
+      'github-app: GitHub App env incomplete (need GITHUB_APP_ID, GITHUB_APP_INSTALLATION_ID, GITHUB_APP_PRIVATE_KEY).',
     );
   }
   const jwt = buildAppJwt(appId, privateKey);
@@ -105,17 +110,17 @@ export async function mintInstallationToken(
       Authorization: `Bearer ${jwt}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
-      'User-Agent': 'gs-agent-sandbox-mcp',
+      'User-Agent': 'gs-backoffice-github-app',
     },
   });
   const raw = await res.text();
   if (!res.ok) {
     throw new Error(
-      `agent-sandbox-mcp: GitHub App token exchange → HTTP ${res.status}: ${raw.slice(0, 300)}`,
+      `github-app: GitHub App token exchange → HTTP ${res.status}: ${raw.slice(0, 300)}`,
     );
   }
   const j = JSON.parse(raw) as { token?: string; expires_at?: string };
-  if (!j.token) throw new Error('agent-sandbox-mcp: GitHub App token exchange returned no token.');
+  if (!j.token) throw new Error('github-app: GitHub App token exchange returned no token.');
   cache = { token: j.token, expMs: j.expires_at ? Date.parse(j.expires_at) : now + 3_600_000 };
   return cache.token;
 }

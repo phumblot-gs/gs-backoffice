@@ -61,6 +61,11 @@ const REPLACEMENT = `const ADAPTER_ENV_PASSTHROUGH = [
     "SANDBOX_GITHUB_TOKEN",
     "SANDBOX_GITHUB_READ_TOKEN",
     "SANDBOX_GITHUB_PUSH_TOKEN",
+    // GitHub App "GRAFMAKER Henri": preferred over the PATs above by the sandbox tools
+    // and the PR-review digest (short-lived installation tokens, nothing to expire).
+    "GITHUB_APP_ID",
+    "GITHUB_APP_INSTALLATION_ID",
+    "GITHUB_APP_PRIVATE_KEY",
     // EVT: the PR-review digest job (plugin worker) publishes notify events.
     "EVT_API_URL",
     "EVT_API_KEY",
