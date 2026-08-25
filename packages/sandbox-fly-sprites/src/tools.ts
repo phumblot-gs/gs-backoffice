@@ -3,6 +3,7 @@ import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
 import { runPrReviewDigest, emitChatNotify } from './digest.js';
+import { resolveGitHubToken } from '@gs-backoffice/github-app';
 
 /**
  * Stable marker logged whenever a scheduled job cannot do its job.
@@ -112,6 +113,30 @@ function envSecret(
       : defaultEnvName;
   const value = process.env[envName];
   return value && value.trim() ? value : undefined;
+}
+
+/**
+ * The GitHub credential to use: a short-lived GitHub App installation token when the
+ * App is configured, else the PAT.
+ *
+ * Preferring the App is what stops a long-lived token from expiring unnoticed — the
+ * PR-review digest spent a month posting "no PRs to review" on the back of a dead PAT.
+ * A mint failure degrades to the PAT instead of failing the call outright, so a
+ * half-configured App never takes the sandbox down.
+ */
+export async function resolveGitHubCredential(
+  pat: () => string | undefined,
+  logger: PluginContext['logger'],
+): Promise<string | undefined> {
+  try {
+    const token = await resolveGitHubToken({ patFallback: () => pat() ?? '' });
+    if (token) return token;
+  } catch (err) {
+    logger.warn('github-app: installation token unavailable — falling back to the PAT', {
+      error: String(err),
+    });
+  }
+  return pat();
 }
 
 interface CodeTaskParams {
@@ -248,13 +273,17 @@ export function registerSandboxTools(ctx: PluginContext): void {
             'Fly Sprites token unavailable in the worker env (expected SPRITES_TOKEN; ensure the plugin-loader env passthrough patch is applied and the secret is set).',
         };
       }
-      // Verification uses a READ-only token when configured, else the push token,
-      // else the combined token (least privilege per role; single-token fallback).
-      const githubToken =
-        (input.credMode === 'push'
-          ? envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN')
-          : envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN')) ??
-        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+      // App installation token first; the PATs stay as the fallback. Within the PATs,
+      // a READ-only token when configured, else the push token, else the combined one
+      // (least privilege per role; single-token fallback).
+      const githubToken = await resolveGitHubCredential(
+        () =>
+          (input.credMode === 'push'
+            ? envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN')
+            : envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN')) ??
+          envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+        ctx.logger,
+      );
 
       const client = flyClient(spritesToken);
       const name = spriteNameForKey(input.sandboxKey);
@@ -344,14 +373,18 @@ export function registerSandboxTools(ctx: PluginContext): void {
       const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
       if (!spritesToken)
         return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
-      // code_task needs a PUSH-capable token (push env, else combined).
-      const githubToken =
-        envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN') ??
-        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+      // code_task needs to PUSH: the App installation token carries the App's contents
+      // + PR permissions, so it serves this path too; PATs remain the fallback.
+      const githubToken = await resolveGitHubCredential(
+        () =>
+          envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN') ??
+          envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+        ctx.logger,
+      );
       if (!githubToken)
         return {
           error:
-            'Push-capable GitHub token unavailable in the worker env (SANDBOX_GITHUB_PUSH_TOKEN or SANDBOX_GITHUB_TOKEN) — required to push.',
+            'Push-capable GitHub credential unavailable: no GitHub App in the worker env (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY) and no SANDBOX_GITHUB_PUSH_TOKEN / SANDBOX_GITHUB_TOKEN — required to push.',
         };
       const anthropicKey = envSecret(cfg, 'anthropicKeyEnv', 'ANTHROPIC_API_KEY');
       if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
@@ -447,15 +480,21 @@ export function registerSandboxTools(ctx: PluginContext): void {
   // GitHub token went unnoticed for weeks.
   ctx.jobs.register('pr-review-digest', async () => {
     const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
-    const token =
-      envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN') ??
-      envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN');
+    // Reads GitHub as the App when it is configured — the read PAT this used to depend
+    // on expired silently and took the digest with it.
+    const token = await resolveGitHubCredential(
+      () =>
+        envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN') ??
+        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+      ctx.logger,
+    );
     if (!token) {
-      ctx.logger.error(`${JOB_FAILURE_MARKER} pr-review-digest: no GitHub read token`, {
-        expected: 'SANDBOX_GITHUB_READ_TOKEN or SANDBOX_GITHUB_TOKEN',
+      ctx.logger.error(`${JOB_FAILURE_MARKER} pr-review-digest: no GitHub credential`, {
+        expected:
+          'a GitHub App (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY) or SANDBOX_GITHUB_READ_TOKEN / SANDBOX_GITHUB_TOKEN',
       });
       await emitChatNotify(
-        "🚨 Digest PR indisponible : aucun token GitHub en lecture n'est configuré. Le statut des revues est INCONNU.",
+        "🚨 Digest PR indisponible : aucun identifiant GitHub n'est configuré. Le statut des revues est INCONNU.",
         'general',
         process.env,
       );
