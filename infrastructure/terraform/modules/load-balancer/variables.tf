@@ -39,3 +39,25 @@ variable "access_logs_retention_days" {
   type        = number
   default     = 90
 }
+
+variable "app_secrets_arn" {
+  description = "ARN of the application secret holding OIDC_CLIENT_ID / OIDC_CLIENT_SECRET"
+  type        = string
+}
+
+variable "paperclip_oidc_enabled" {
+  description = <<-EOT
+    Require JumpCloud OIDC authentication at the load balancer before any request
+    reaches the Paperclip board.
+
+    Kept as a switch rather than hardcoded because this is the one change that can
+    lock every human out of the board at once — a wrong client secret, a revoked
+    SSO application, an expired JumpCloud subscription. Flipping this to false and
+    applying restores direct access without unpicking the rule.
+
+    Never applied to the MCP listener rule: Claude.ai speaks MCP, which cannot
+    follow an interactive redirect.
+  EOT
+  type        = bool
+  default     = true
+}

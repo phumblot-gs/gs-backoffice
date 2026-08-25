@@ -52,6 +52,8 @@ module "load_balancer" {
 
   paperclip_domain = var.paperclip_domain
   mcp_domain       = var.mcp_domain
+
+  app_secrets_arn = module.secrets.app_secrets_arn
 }
 
 # -----------------------------------------------------------------------------
