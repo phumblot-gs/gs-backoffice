@@ -33,3 +33,9 @@ variable "mcp_domain" {
   description = "Domain for MCP server (e.g., mcp-backoffice-staging.grand-shooting.com)"
   type        = string
 }
+
+variable "access_logs_retention_days" {
+  description = "Days to keep ALB access logs in S3 before expiry. 90 gives a full quarter to investigate an incident, well past the 30-day CloudWatch retention that limited the 2026-08 audit."
+  type        = number
+  default     = 90
+}

@@ -33,3 +33,8 @@ output "acm_certificate_validation_records" {
     }
   }
 }
+
+output "alb_access_logs_bucket" {
+  description = "S3 bucket holding the ALB access logs"
+  value       = aws_s3_bucket.alb_logs.id
+}
