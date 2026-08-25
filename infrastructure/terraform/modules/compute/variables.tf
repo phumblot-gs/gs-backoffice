@@ -15,6 +15,11 @@ variable "aws_region" {
   default     = "eu-west-1"
 }
 
+variable "vpc_id" {
+  description = "VPC ID (for the private DNS namespace used by service discovery)"
+  type        = string
+}
+
 variable "private_subnet_ids" {
   description = "Private subnet IDs for ECS tasks"
   type        = list(string)

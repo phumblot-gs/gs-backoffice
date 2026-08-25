@@ -77,10 +77,12 @@ export function readProxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConf
   }
 
   // The bridge always runs ON the Paperclip container (the agent's Local env), so it
-  // calls the server over LOOPBACK. Paperclip's `PAPERCLIP_API_URL` resolves to the
-  // public base URL, which routes through the ALB (60s cap) and 504s long-running
-  // tools like sandbox_code_task — loopback bypasses that. `PAPERCLIP_SANDBOX_API_URL`
-  // is an explicit override if ever needed.
+  // calls the server over LOOPBACK. This used to be a workaround: `PAPERCLIP_API_URL`
+  // resolved to the public base URL, so internal calls went out through the NAT
+  // gateway and back via the ALB, whose 60s idle cap 504'd long-running tools like
+  // sandbox_code_task. The task definition now sets that variable to loopback in this
+  // container, so the two agree — we still resolve it here rather than trusting the
+  // environment. `PAPERCLIP_SANDBOX_API_URL` is an explicit override if ever needed.
   const port = get('PORT') || get('PAPERCLIP_LISTEN_PORT') || '3100';
   const apiUrl = (get('PAPERCLIP_SANDBOX_API_URL') || `http://127.0.0.1:${port}`).replace(
     /\/+$/,
