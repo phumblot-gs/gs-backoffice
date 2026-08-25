@@ -114,10 +114,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Single source of truth: /.terraform-version, which tfenv also reads locally.
+      - name: Resolve Terraform version
+        id: tfver
+        # Absolute path: this job runs with working-directory set to the env folder.
+        run: echo "version=$(cat "$GITHUB_WORKSPACE/.terraform-version")" >> "$GITHUB_OUTPUT"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: '1.9.8'
+          terraform_version: ${{ steps.tfver.outputs.version }}
 
       - name: Terraform Init
         run: terraform init
