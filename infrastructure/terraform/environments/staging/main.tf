@@ -63,6 +63,7 @@ module "compute" {
   project_name = var.project_name
   aws_region   = var.aws_region
 
+  vpc_id                = module.networking.vpc_id
   private_subnet_ids    = module.networking.private_subnet_ids
   ecs_security_group_id = module.networking.ecs_security_group_id
 

@@ -17,6 +17,51 @@ resource "aws_ecs_cluster" "main" {
 # -----------------------------------------------------------------------------
 # CloudWatch Log Groups
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Service discovery (east-west traffic)
+#
+# The MCP server needs to call the Paperclip API. Until now the only address it
+# had was the PUBLIC hostname, so every internal call left the private subnet
+# through the NAT gateway, crossed the internet, and came back in via the ALB's
+# public IPs — for two tasks in the same subnet. That detour already cost us once:
+# the agent bridge had to hardcode a loopback override because long-running tools
+# were being killed by the ALB's 60s idle cap (see apps/agent-sandbox-mcp/src/proxy.ts).
+#
+# It also made the board impossible to put behind edge authentication: an OIDC
+# action on the listener rule would have answered those internal API calls with a
+# redirect to the identity provider, which no MCP client can follow.
+#
+# A private DNS namespace gives Paperclip an internal name resolving to the task
+# ENI, so internal traffic stays inside the VPC.
+# -----------------------------------------------------------------------------
+resource "aws_service_discovery_private_dns_namespace" "internal" {
+  name        = "${var.project_name}-${var.environment}.local"
+  description = "Internal service discovery for ${var.project_name} ${var.environment}"
+  vpc         = var.vpc_id
+}
+
+resource "aws_service_discovery_service" "paperclip" {
+  name = "paperclip"
+
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.internal.id
+
+    dns_records {
+      # Short TTL: with awsvpc networking the record holds the task ENI IP, which
+      # changes on every deployment.
+      ttl  = 10
+      type = "A"
+    }
+
+    routing_policy = "MULTIVALUE"
+  }
+
+  # ECS manages instance registration/deregistration for us.
+  health_check_custom_config {
+    failure_threshold = 1
+  }
+}
+
 resource "aws_cloudwatch_log_group" "paperclip" {
   name              = "/ecs/${var.project_name}-${var.environment}/paperclip"
   retention_in_days = 30
@@ -152,6 +197,10 @@ resource "aws_ecs_task_definition" "paperclip" {
       { name = "PAPERCLIP_PUBLIC_URL", value = var.paperclip_public_url },
       # The ALB is internet-facing: keep public account creation closed (see the variable).
       { name = "PAPERCLIP_DISABLE_SIGNUP", value = tostring(var.paperclip_disable_signup) },
+      # Paperclip's own plugin workers (budget jobs, PR-review digest) call the API
+      # from inside this container, so the right address is loopback — never the
+      # public hostname, which would leave the VPC to come straight back.
+      { name = "PAPERCLIP_API_URL", value = "http://localhost:3100" },
       # Repo the self-evolution bridge operates on, when the agent omits repoUrl. Read by
       # the bridge as a fallback — NOT bound to a Paperclip workspace, which would make the
       # host attempt a git clone each run (we keep all code execution in the Fly sandbox).
@@ -229,10 +278,6 @@ resource "aws_ecs_task_definition" "paperclip" {
       # Native budget API (GRA-42 Step 2): the budget plugin worker reads budgets/overview
       # over loopback. Mirrors the mcp-server container + the ADAPTER_ENV_PASSTHROUGH patch.
       {
-        name      = "PAPERCLIP_API_URL"
-        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_URL::"
-      },
-      {
         name      = "PAPERCLIP_API_KEY"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_KEY::"
       },
@@ -275,15 +320,16 @@ resource "aws_ecs_task_definition" "mcp" {
     environment = [
       { name = "MCP_SERVER_PORT", value = "3001" },
       { name = "NODE_ENV", value = var.environment },
+      # Reach Paperclip over the private DNS namespace, not the public hostname.
+      {
+        name  = "PAPERCLIP_API_URL"
+        value = "http://${aws_service_discovery_service.paperclip.name}.${aws_service_discovery_private_dns_namespace.internal.name}:3100"
+      },
     ]
     secrets = [
       {
         name      = "DATABASE_URL"
         valueFrom = "${var.db_secret_arn}:url::"
-      },
-      {
-        name      = "PAPERCLIP_API_URL"
-        valueFrom = "${var.app_secrets_arn}:PAPERCLIP_API_URL::"
       },
       {
         name      = "PAPERCLIP_API_KEY"
@@ -410,6 +456,11 @@ resource "aws_ecs_service" "paperclip" {
     target_group_arn = var.paperclip_target_group_arn
     container_name   = "paperclip"
     container_port   = 3100
+  }
+
+  # Publishes the task ENI as paperclip.<project>-<env>.local for in-VPC callers.
+  service_registries {
+    registry_arn = aws_service_discovery_service.paperclip.arn
   }
 
   deployment_minimum_healthy_percent = 100

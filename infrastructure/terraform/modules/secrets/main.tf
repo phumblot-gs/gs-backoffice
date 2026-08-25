@@ -13,12 +13,16 @@ resource "aws_secretsmanager_secret" "app" {
 resource "aws_secretsmanager_secret_version" "app" {
   secret_id = aws_secretsmanager_secret.app.id
   secret_string = jsonencode({
-    BETTER_AUTH_SECRET      = "CHANGE_ME"
-    ANTHROPIC_API_KEY       = "CHANGE_ME"
-    EVT_API_URL             = "https://api.events.grand-shooting.com"
-    EVT_API_KEY             = "CHANGE_ME"
-    EVT_ACCOUNT_ID          = "CHANGE_ME"
-    PAPERCLIP_API_URL       = "http://localhost:3100"
+    BETTER_AUTH_SECRET = "CHANGE_ME"
+    ANTHROPIC_API_KEY  = "CHANGE_ME"
+    EVT_API_URL        = "https://api.events.grand-shooting.com"
+    EVT_API_KEY        = "CHANGE_ME"
+    EVT_ACCOUNT_ID     = "CHANGE_ME"
+    # PAPERCLIP_API_URL deliberately absent: it is not a secret, and one shared
+    # value cannot serve both containers (Paperclip's plugins need loopback, the
+    # MCP server needs a routable address). It lives in each task definition's
+    # `environment` instead. Existing environments keep a now-unused key in the
+    # live secret — harmless, since `ignore_changes` never rewrites it.
     PAPERCLIP_API_KEY       = "CHANGE_ME"
     PAPERCLIP_COMPANY_ID    = "CHANGE_ME"
     CHIEF_OF_STAFF_AGENT_ID = "CHANGE_ME"
