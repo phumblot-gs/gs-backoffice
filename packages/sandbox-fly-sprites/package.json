@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.609.0",
+    "@paperclipai/plugin-sdk": "2026.824.1",
     "@fly/sprites": "0.0.1",
     "ws": "^8.18.0"
   },
