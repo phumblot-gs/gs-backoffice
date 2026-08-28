@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Surgical runtime patch for @paperclipai/server (pinned 2026.609.0).
+ * Surgical runtime patch for @paperclipai/server (pinned 2026.824.1).
  *
  * WHY: plugin workers receive a curated env, not the full container env. Only the
  * keys in `ADAPTER_ENV_PASSTHROUGH` are passed through (and only for plugins with

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Surgical runtime patch for @paperclipai/server (pinned 2026.609.0).
+ * Surgical runtime patch for @paperclipai/server (pinned 2026.824.1).
  *
  * WHY: host→worker RPC calls default to a 30s timeout, and the tool registry
  * dispatches `executeTool` without an override — so any plugin tool call is capped

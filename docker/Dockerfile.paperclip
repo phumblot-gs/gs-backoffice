@@ -59,7 +59,7 @@ COPY config/rbac.json /opt/gs-agent-tools/rbac.json
 
 FROM base AS production
 WORKDIR /app
-RUN npm install --global paperclipai@2026.609.0 @anthropic-ai/claude-code@latest
+RUN npm install --global paperclipai@2026.824.1 @anthropic-ai/claude-code@latest
 # Surgical patch: forward the sandbox tools' secrets (SPRITES_TOKEN, SANDBOX_GITHUB_*)
 # to the plugin worker via ADAPTER_ENV_PASSTHROUGH, and gate that passthrough on
 # `agent.tools.register` (the SDK's other secret paths are unavailable to tools in
