@@ -14,6 +14,7 @@ import {
   readProxyConfig,
   executeSandboxTool,
   reportProgress,
+  DEPLOY_LABEL,
   openPr,
   getDiff,
   createChildIssue,
@@ -264,8 +265,19 @@ export function createServer(): McpServer {
           } catch {
             /* notify is best-effort */
           }
+          // The label is what makes merging deploy to staging. If it did not stick,
+          // say so plainly and tell the agent to put it in the PR body — a silent
+          // miss is exactly how PR #107 got merged and never deployed.
+          const labelNote = r.labelError
+            ? `\n\n⚠️ The "${DEPLOY_LABEL}" label could NOT be applied (${r.labelError}). ` +
+              `Merging this PR will NOT deploy to staging. Say so in the PR description ` +
+              `and ask a human to add the label before merging.`
+            : r.labels.length > 0
+              ? ` · labelled ${r.labels.join(', ')}`
+              : '';
           return textResult(
-            `Opened PR #${r.number}: ${r.url}${notified ? ' (review notification sent)' : ''}`,
+            `Opened PR #${r.number}: ${r.url}${notified ? ' (review notification sent)' : ''}${labelNote}`,
+            Boolean(r.labelError),
           );
         } catch (err) {
           return textResult((err as Error).message, true);

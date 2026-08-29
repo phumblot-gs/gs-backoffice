@@ -502,11 +502,56 @@ function ghHeaders(token: string, accept = 'application/vnd.github+json'): Recor
 }
 
 /** Open a pull request for a pushed branch. Uses the push-scoped token. */
+/**
+ * Label that makes `promote-staging.yml` deploy the merge. The workflow used to key
+ * on a `methods-officer/*` branch prefix, which the loop stopped matching once it
+ * started naming branches after the change; PR #107 was merged and nothing deployed.
+ * Carrying the label instead puts the intent on the pull request, where a human can
+ * read it before merging — and remove it to withhold the deploy.
+ */
+export const DEPLOY_LABEL = 'deploy:staging';
+
+/**
+ * Attach labels to a pull request. GitHub has no label field on PR creation, so this
+ * is a second call. Deliberately never throws: the pull request is the durable result
+ * of the engineer loop and must not be lost over a label. The caller reports the
+ * outcome instead — silence here would recreate the very bug this label exists to fix.
+ */
+async function addPrLabels(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  labels: string[],
+  token: string,
+  fetchImpl: FetchLike,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetchImpl(`${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/labels`, {
+      method: 'POST',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels }),
+    });
+    if (!res.ok) {
+      return { ok: false, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function openPr(
-  input: { repoUrl: string; head: string; base?: string; title: string; body?: string },
+  input: {
+    repoUrl: string;
+    head: string;
+    base?: string;
+    title: string;
+    body?: string;
+    labels?: string[];
+  },
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{ number: number; url: string }> {
+): Promise<{ number: number; url: string; labels: string[]; labelError?: string }> {
   const { owner, repo } = parseGitHubRepo(input.repoUrl);
   const token = await resolveGitHubToken({ patFallback: () => githubToken('push', env), env });
   const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
@@ -525,7 +570,19 @@ export async function openPr(
     throw new Error(`agent-sandbox-mcp: open_pr → HTTP ${res.status}: ${raw.slice(0, 600)}`);
   }
   const j = JSON.parse(raw) as { number?: number; html_url?: string };
-  return { number: j.number ?? 0, url: j.html_url ?? '' };
+  const number = j.number ?? 0;
+
+  const labels = input.labels ?? [DEPLOY_LABEL];
+  if (number === 0 || labels.length === 0) {
+    return { number, url: j.html_url ?? '', labels: [] };
+  }
+  const labelled = await addPrLabels(owner, repo, number, labels, token, fetchImpl);
+  return {
+    number,
+    url: j.html_url ?? '',
+    labels: labelled.ok ? labels : [],
+    ...(labelled.ok ? {} : { labelError: labelled.error }),
+  };
 }
 
 /** Return the unified diff of base...head for review. Uses the read-scoped token. */
