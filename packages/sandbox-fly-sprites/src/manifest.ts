@@ -19,14 +19,19 @@ const manifest: PaperclipPluginManifestV1 = {
     'Agent tools to run commands and Claude coding tasks in isolated Fly Sprite microVMs (sandbox_run, sandbox_code_task, sandbox_release), with an idle reaper.',
   author: 'GRAFMAKER',
   categories: ['automation'],
-  // The worker env passthrough (SPRITES_TOKEN / SANDBOX_GITHUB_* / ANTHROPIC_API_KEY)
-  // is gated on `agent.tools.register` by our plugin-env patch (the env driver, which
-  // previously satisfied that gate, has been retired).
+  // Secrets reach this worker two ways, in that order of preference:
+  //  1. `secrets.read-ref` — the native path. Paperclip 2026.824.1 finally lets a
+  //     plugin TOOL call `ctx.secrets.resolve()`; in 2026.609.0 that threw, which is
+  //     the only reason the env passthrough patch was written in the first place.
+  //  2. The worker env passthrough (docker/patches/patch-paperclip-plugin-env.mjs),
+  //     kept as a fallback so this migration deploys without a config change.
+  // The patch cannot be retired until the EVT and Paperclip API keys move over too.
   capabilities: [
     'agent.tools.register',
     'jobs.schedule',
     'plugin.state.read',
     'plugin.state.write',
+    'secrets.read-ref',
   ],
   // Idle reaper: hourly job that deletes sandbox Sprites idle beyond the TTL.
   jobs: [
@@ -47,12 +52,45 @@ const manifest: PaperclipPluginManifestV1 = {
   entrypoints: {
     worker: './dist/worker.js',
   },
-  // Operator config for the sandbox tools. Secrets are NOT here — they reach the
-  // worker via the env passthrough (see docker/patches/patch-paperclip-plugin-env.mjs);
-  // these fields only let an operator override the env-var NAMES and defaults.
+  // Operator config for the sandbox tools.
+  //
+  // The `*Token` fields hold Paperclip secret REFERENCES (`format: 'secret-ref'`) —
+  // never a value. They are resolved at call time via `ctx.secrets.resolve()`.
+  // The `*Env` fields below are the legacy path: env-var NAMES read from the worker
+  // env passthrough. A reference wins when both are set; the env name is the fallback
+  // so nothing breaks before an operator fills the references in.
   instanceConfigSchema: {
     type: 'object',
     properties: {
+      spritesToken: {
+        type: 'string',
+        format: 'secret-ref',
+        description:
+          'Fly Sprites API token, as a Paperclip secret reference. Preferred over spritesTokenEnv.',
+      },
+      githubToken: {
+        type: 'string',
+        format: 'secret-ref',
+        description:
+          'Combined GitHub token as a secret reference, used when no read/push split is set. Preferred over githubTokenEnv.',
+      },
+      githubReadToken: {
+        type: 'string',
+        format: 'secret-ref',
+        description:
+          'Read-only GitHub token as a secret reference. Preferred over githubReadTokenEnv.',
+      },
+      githubPushToken: {
+        type: 'string',
+        format: 'secret-ref',
+        description:
+          'Push-capable GitHub token as a secret reference. Preferred over githubPushTokenEnv.',
+      },
+      anthropicKey: {
+        type: 'string',
+        format: 'secret-ref',
+        description: 'Anthropic API key as a secret reference. Preferred over anthropicKeyEnv.',
+      },
       spritesTokenEnv: {
         type: 'string',
         description: 'Env var name holding the Fly Sprites API token (default SPRITES_TOKEN).',
