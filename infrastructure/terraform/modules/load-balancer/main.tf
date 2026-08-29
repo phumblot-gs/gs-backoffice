@@ -257,7 +257,15 @@ resource "aws_lb_listener_rule" "paperclip" {
         client_id     = local.oidc_client_id
         client_secret = local.oidc_client_secret
 
-        scope = "openid email profile"
+        # `offline_access` is load-bearing, not decoration: it is what makes JumpCloud
+        # issue a refresh token. Without one, the load balancer cannot renew an expired
+        # ID token — it has to run a full re-authentication, which means answering with
+        # a 302 to the identity provider. A browser navigation follows that invisibly;
+        # an XHR or a WebSocket handshake cannot, so the application sees an authorization
+        # failure and says so. Shipping without this scope produced exactly that: 375
+        # redirects on the board's WebSocket against a single successful upgrade, while
+        # the sign-in itself worked fine.
+        scope = "openid email profile offline_access"
 
         # Send the caller to JumpCloud rather than returning 401, so a human lands
         # on a login page and a scanner gets a redirect instead of the application.
