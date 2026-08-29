@@ -15,6 +15,7 @@ import {
   parseCodeTaskParams,
   reapIdleSandboxes,
   resolveGitHubCredential,
+  resolveSecret,
 } from './tools.js';
 import type { PluginContext } from '@paperclipai/plugin-sdk';
 
@@ -278,5 +279,69 @@ describe('resolveGitHubCredential (App-first credential selection)', () => {
   it('returns undefined when neither an App nor a PAT is available', async () => {
     const { logger: log } = logger();
     expect(await resolveGitHubCredential(() => undefined, log)).toBeUndefined();
+  });
+});
+
+describe('resolveSecret (native secret store first, env as fallback)', () => {
+  const mkCtx = () => {
+    const warns: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+    const make = (resolve: (ref: unknown) => Promise<string>) =>
+      ({
+        secrets: { resolve },
+        logger: {
+          info: () => {},
+          warn: (msg: string, meta?: Record<string, unknown>) => warns.push({ msg, meta }),
+          error: () => {},
+          debug: () => {},
+        },
+      }) as unknown as PluginContext;
+    return { warns, make };
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('uses the resolved reference and never reads the env', async () => {
+    const { make } = mkCtx();
+    vi.stubEnv('SPRITES_TOKEN', 'from-env');
+    const ctx = make(async () => 'from-store');
+    const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
+    await expect(
+      resolveSecret(ctx, cfg, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
+    ).resolves.toBe('from-store');
+  });
+
+  it('falls back to the env when the reference fails to resolve, and says so', async () => {
+    const { make, warns } = mkCtx();
+    vi.stubEnv('SPRITES_TOKEN', 'from-env');
+    const ctx = make(async () => {
+      throw new Error('provider unavailable');
+    });
+    const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
+    await expect(
+      resolveSecret(ctx, cfg, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
+    ).resolves.toBe('from-env');
+    // A silently empty credential is how one goes missing unnoticed.
+    expect(warns[0]?.msg).toMatch(/could not be resolved/);
+  });
+
+  it('falls back — and warns — when the reference resolves to an empty value', async () => {
+    const { make, warns } = mkCtx();
+    vi.stubEnv('SPRITES_TOKEN', 'from-env');
+    const ctx = make(async () => '   ');
+    const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
+    await expect(
+      resolveSecret(ctx, cfg, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
+    ).resolves.toBe('from-env');
+    expect(warns[0]?.msg).toMatch(/empty value/);
+  });
+
+  it('uses the env when no reference is configured — the pre-migration path', async () => {
+    const { make, warns } = mkCtx();
+    vi.stubEnv('SPRITES_TOKEN', 'from-env');
+    const ctx = make(async () => 'unused');
+    await expect(
+      resolveSecret(ctx, {}, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
+    ).resolves.toBe('from-env');
+    expect(warns).toHaveLength(0);
   });
 });

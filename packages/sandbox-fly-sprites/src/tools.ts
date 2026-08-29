@@ -95,12 +95,13 @@ const SANDBOX_RUN_SCHEMA = {
 } as const;
 
 /**
- * Read a token from the worker env. In Paperclip 2026.609.0 a plugin tool has no
- * working secret-resolution path (ctx.secrets.resolve is hard-disabled; ctx.config
- * returns unresolved config), so secrets reach the worker via the env passthrough
- * (SPRITES_TOKEN, SANDBOX_GITHUB_TOKEN, ANTHROPIC_API_KEY — injected by Terraform,
- * forwarded by our plugin-loader patch). An optional config field can override the
- * env-var name. Pure-ish (reads process.env).
+ * Read a token from the worker env — the LEGACY path, now only a fallback behind
+ * `resolveSecret`. It exists because Paperclip 2026.609.0 gave a plugin tool no
+ * working secret-resolution path (ctx.secrets.resolve threw), so secrets had to reach
+ * the worker via the env passthrough (injected by Terraform, forwarded by our
+ * plugin-loader patch). 2026.824.1 lifted that restriction. Keep this until the EVT
+ * and Paperclip API keys have moved to references too — only then can the patch go.
+ * An optional config field can override the env-var name. Pure-ish (reads process.env).
  */
 function envSecret(
   cfg: Record<string, unknown>,
@@ -116,6 +117,44 @@ function envSecret(
 }
 
 /**
+ * Resolve one secret, preferring Paperclip's native secret store over the env.
+ *
+ * `ctx.secrets.resolve()` only became usable for plugin tools in 2026.824.1 — in
+ * 2026.609.0 it threw, which is why the worker env passthrough patch exists at all.
+ * The env fallback is kept deliberately: it lets this migration deploy before any
+ * operator has filled in the references, and it is the seam that lets the patch be
+ * retired later without a flag day.
+ *
+ * A resolution failure is NOT swallowed silently — it falls back to the env, but says
+ * so, because a reference that quietly resolves to nothing is how a credential goes
+ * missing without anyone noticing.
+ */
+export async function resolveSecret(
+  ctx: PluginContext,
+  cfg: Record<string, unknown>,
+  refKey: string,
+  envOverrideKey: string,
+  defaultEnvName: string,
+): Promise<string | undefined> {
+  const ref = cfg[refKey];
+  if (ref && (typeof ref === 'string' || typeof ref === 'object')) {
+    try {
+      const value = await ctx.secrets.resolve(ref as Parameters<typeof ctx.secrets.resolve>[0]);
+      if (value && value.trim()) return value;
+      ctx.logger.warn('secret reference resolved to an empty value — falling back to the env', {
+        refKey,
+      });
+    } catch (err) {
+      ctx.logger.warn('secret reference could not be resolved — falling back to the env', {
+        refKey,
+        error: String(err),
+      });
+    }
+  }
+  return envSecret(cfg, envOverrideKey, defaultEnvName);
+}
+
+/**
  * The GitHub credential to use: a short-lived GitHub App installation token when the
  * App is configured, else the PAT.
  *
@@ -125,18 +164,22 @@ function envSecret(
  * half-configured App never takes the sandbox down.
  */
 export async function resolveGitHubCredential(
-  pat: () => string | undefined,
+  pat: () => Promise<string | undefined> | string | undefined,
   logger: PluginContext['logger'],
 ): Promise<string | undefined> {
+  const fallback = async () => (await pat()) ?? '';
   try {
-    const token = await resolveGitHubToken({ patFallback: () => pat() ?? '' });
+    // resolveGitHubToken takes a sync fallback; resolve ours first so a secret-ref
+    // lookup can be awaited before handing the value over.
+    const pre = await fallback();
+    const token = await resolveGitHubToken({ patFallback: () => pre });
     if (token) return token;
   } catch (err) {
     logger.warn('github-app: installation token unavailable — falling back to the PAT', {
       error: String(err),
     });
   }
-  return pat();
+  return fallback().then((v) => v || undefined);
 }
 
 interface CodeTaskParams {
@@ -266,7 +309,13 @@ export function registerSandboxTools(ctx: PluginContext): void {
         typeof cfg.region === 'string' && cfg.region.trim() ? cfg.region.trim() : 'cdg';
       const timeoutMs = typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : undefined;
 
-      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+      const spritesToken = await resolveSecret(
+        ctx,
+        cfg,
+        'spritesToken',
+        'spritesTokenEnv',
+        'SPRITES_TOKEN',
+      );
       if (!spritesToken) {
         return {
           error:
@@ -277,11 +326,23 @@ export function registerSandboxTools(ctx: PluginContext): void {
       // a READ-only token when configured, else the push token, else the combined one
       // (least privilege per role; single-token fallback).
       const githubToken = await resolveGitHubCredential(
-        () =>
+        async () =>
           (input.credMode === 'push'
-            ? envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN')
-            : envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN')) ??
-          envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+            ? await resolveSecret(
+                ctx,
+                cfg,
+                'githubPushToken',
+                'githubPushTokenEnv',
+                'SANDBOX_GITHUB_PUSH_TOKEN',
+              )
+            : await resolveSecret(
+                ctx,
+                cfg,
+                'githubReadToken',
+                'githubReadTokenEnv',
+                'SANDBOX_GITHUB_READ_TOKEN',
+              )) ??
+          (await resolveSecret(ctx, cfg, 'githubToken', 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN')),
         ctx.logger,
       );
 
@@ -370,15 +431,27 @@ export function registerSandboxTools(ctx: PluginContext): void {
         typeof cfg.region === 'string' && cfg.region.trim() ? cfg.region.trim() : 'cdg';
       const cfgTimeout = typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : undefined;
 
-      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+      const spritesToken = await resolveSecret(
+        ctx,
+        cfg,
+        'spritesToken',
+        'spritesTokenEnv',
+        'SPRITES_TOKEN',
+      );
       if (!spritesToken)
         return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
       // code_task needs to PUSH: the App installation token carries the App's contents
       // + PR permissions, so it serves this path too; PATs remain the fallback.
       const githubToken = await resolveGitHubCredential(
-        () =>
-          envSecret(cfg, 'githubPushTokenEnv', 'SANDBOX_GITHUB_PUSH_TOKEN') ??
-          envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+        async () =>
+          (await resolveSecret(
+            ctx,
+            cfg,
+            'githubPushToken',
+            'githubPushTokenEnv',
+            'SANDBOX_GITHUB_PUSH_TOKEN',
+          )) ??
+          (await resolveSecret(ctx, cfg, 'githubToken', 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN')),
         ctx.logger,
       );
       if (!githubToken)
@@ -386,7 +459,13 @@ export function registerSandboxTools(ctx: PluginContext): void {
           error:
             'Push-capable GitHub credential unavailable: no GitHub App in the worker env (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY) and no SANDBOX_GITHUB_PUSH_TOKEN / SANDBOX_GITHUB_TOKEN — required to push.',
         };
-      const anthropicKey = envSecret(cfg, 'anthropicKeyEnv', 'ANTHROPIC_API_KEY');
+      const anthropicKey = await resolveSecret(
+        ctx,
+        cfg,
+        'anthropicKey',
+        'anthropicKeyEnv',
+        'ANTHROPIC_API_KEY',
+      );
       if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
 
       const client = flyClient(spritesToken);
@@ -441,7 +520,13 @@ export function registerSandboxTools(ctx: PluginContext): void {
           : '';
       if (!key) return { error: 'Missing or empty required parameter: sandboxKey' };
       const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
-      const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+      const spritesToken = await resolveSecret(
+        ctx,
+        cfg,
+        'spritesToken',
+        'spritesTokenEnv',
+        'SPRITES_TOKEN',
+      );
       if (!spritesToken)
         return { error: 'Fly Sprites token unavailable in the worker env (SPRITES_TOKEN).' };
       const name = spriteNameForKey(key);
@@ -465,7 +550,13 @@ export function registerSandboxTools(ctx: PluginContext): void {
     const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
     const ttlDays =
       typeof cfg.reaperTtlDays === 'number' && cfg.reaperTtlDays > 0 ? cfg.reaperTtlDays : 7;
-    const spritesToken = envSecret(cfg, 'spritesTokenEnv', 'SPRITES_TOKEN');
+    const spritesToken = await resolveSecret(
+      ctx,
+      cfg,
+      'spritesToken',
+      'spritesTokenEnv',
+      'SPRITES_TOKEN',
+    );
     if (!spritesToken) {
       ctx.logger.warn('sandbox-reaper: SPRITES_TOKEN unavailable, skipping');
       return;
@@ -483,9 +574,15 @@ export function registerSandboxTools(ctx: PluginContext): void {
     // Reads GitHub as the App when it is configured — the read PAT this used to depend
     // on expired silently and took the digest with it.
     const token = await resolveGitHubCredential(
-      () =>
-        envSecret(cfg, 'githubReadTokenEnv', 'SANDBOX_GITHUB_READ_TOKEN') ??
-        envSecret(cfg, 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN'),
+      async () =>
+        (await resolveSecret(
+          ctx,
+          cfg,
+          'githubReadToken',
+          'githubReadTokenEnv',
+          'SANDBOX_GITHUB_READ_TOKEN',
+        )) ??
+        (await resolveSecret(ctx, cfg, 'githubToken', 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN')),
       ctx.logger,
     );
     if (!token) {
