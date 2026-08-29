@@ -147,6 +147,8 @@ resource "aws_iam_role_policy" "ecs_task_secrets" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Bootstrap secrets: the single JSON document Terraform injects into the task
+        # definition. Read once at container start, before Paperclip can resolve anything.
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue"
@@ -154,6 +156,39 @@ resource "aws_iam_role_policy" "ecs_task_secrets" {
         Resource = [
           var.app_secrets_arn
         ]
+      },
+      {
+        # Paperclip's own secret store. 2026.824.1 ships an AWS Secrets Manager provider
+        # that MANAGES secrets rather than reading ours: one AWS secret per value, named
+        # under a prefix. Pointing Paperclip at it is what lets plugin config and agent
+        # env hold secret REFERENCES instead of values — which in turn retires the
+        # ADAPTER_ENV_PASSTHROUGH patch and stops agent secrets being stored in clear.
+        #
+        # Scoped to the prefix: this role can never touch the bootstrap secret above,
+        # nor anything else in the account. ListSecrets has no resource-level form, so
+        # it is granted separately below and only exposes names and metadata.
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:TagResource"
+        ]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.paperclip_secret_prefix}/*"
+        ]
+      },
+      {
+        # ListSecrets does not support resource-level permissions. It returns names,
+        # tags and metadata — never values — so the blast radius is disclosure of which
+        # secrets exist, not of what they contain.
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:ListSecrets"
+        ]
+        Resource = ["*"]
       },
       {
         Effect = "Allow"
