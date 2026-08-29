@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "2026.609.0"
+    "@paperclipai/plugin-sdk": "2026.824.1"
   },
   "devDependencies": {
     "@gs-backoffice/core": "workspace:*",

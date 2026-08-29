@@ -181,8 +181,8 @@ importers:
   packages/budget-plugin:
     dependencies:
       '@paperclipai/plugin-sdk':
-        specifier: 2026.609.0
-        version: 2026.609.0
+        specifier: 2026.824.1
+        version: 2026.824.1
     devDependencies:
       '@gs-backoffice/core':
         specifier: workspace:*
@@ -269,8 +269,8 @@ importers:
         specifier: 0.0.1
         version: 0.0.1
       '@paperclipai/plugin-sdk':
-        specifier: 2026.609.0
-        version: 2026.609.0
+        specifier: 2026.824.1
+        version: 2026.824.1
       ws:
         specifier: ^8.18.0
         version: 8.21.0
@@ -782,8 +782,8 @@ packages:
     resolution: {integrity: sha512-cifvXDhcqMwwTlTK04GBNeIe7yyo28Mfby85QXFe1Yk8nmi36Ab/5UQwptOx84SsoGNRg+EVSjwzfSZMy6pmlw==}
     engines: {node: '>=14'}
 
-  '@paperclipai/plugin-sdk@2026.609.0':
-    resolution: {integrity: sha512-/Bn9lN4JWPKevhuwK0w54IHMqOKc+4z6ZEAwoE7HR+u2V1lPbSdlNZat3LCP+m0BTOweLO7s/dwhEay8nw+rNQ==}
+  '@paperclipai/plugin-sdk@2026.824.1':
+    resolution: {integrity: sha512-Zynbb60ocqPGWexSTSSJLBfJ9LAXJ/J8h65C56CZxCRnXFyYb0HaYbwq4JcqwkC0MmhgK0HFU6qrnCVGT5ghuw==}
     hasBin: true
     peerDependencies:
       react: '>=18'
@@ -793,6 +793,9 @@ packages:
 
   '@paperclipai/shared@2026.609.0':
     resolution: {integrity: sha512-+jiu1EGcqMNIleX7w62B8K0yc0VxumCIyGCfCbtIVup9F3AbB1eQ8AIi/hySffFF+0SvgmkzcZsJCYvV1REzDw==}
+
+  '@paperclipai/shared@2026.824.1':
+    resolution: {integrity: sha512-PKgePWGXWhQYRoILtKG7S2QppFkBKmCpzVEySoo6BXO4aO1vmgYDi5f9x3wC7zzukugWkEqMOjBspTMCuYtvTQ==}
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -2503,12 +2506,16 @@ snapshots:
 
   '@opentelemetry/semantic-conventions@1.40.0': {}
 
-  '@paperclipai/plugin-sdk@2026.609.0':
+  '@paperclipai/plugin-sdk@2026.824.1':
     dependencies:
-      '@paperclipai/shared': 2026.609.0
+      '@paperclipai/shared': 2026.824.1
       zod: 3.25.76
 
   '@paperclipai/shared@2026.609.0':
+    dependencies:
+      zod: 3.25.76
+
+  '@paperclipai/shared@2026.824.1':
     dependencies:
       zod: 3.25.76
 
