@@ -9,6 +9,7 @@ import {
   reportProgress,
   parseGitHubRepo,
   githubToken,
+  DEPLOY_LABEL,
   openPr,
   getDiff,
   createChildIssue,
@@ -449,8 +450,15 @@ describe('openPr', () => {
   it('POSTs to the repo pulls endpoint with the push token and returns number+url', async () => {
     const cap: { url?: string; init?: RequestInit } = {};
     const f = fakeFetch(201, { number: 7, html_url: 'https://github.com/org/repo/pull/7' }, cap);
+    // labels: [] keeps this test on the creation call; labelling has its own tests.
     const r = await openPr(
-      { repoUrl: 'https://github.com/org/repo.git', head: 'eng/x', title: 'T', body: 'B' },
+      {
+        repoUrl: 'https://github.com/org/repo.git',
+        head: 'eng/x',
+        title: 'T',
+        body: 'B',
+        labels: [],
+      },
       f,
       GH_ENV,
     );
@@ -462,7 +470,49 @@ describe('openPr', () => {
       base: 'main',
       title: 'T',
     });
-    expect(r).toEqual({ number: 7, url: 'https://github.com/org/repo/pull/7' });
+    expect(r).toMatchObject({ number: 7, url: 'https://github.com/org/repo/pull/7' });
+  });
+
+  it('labels the PR with deploy:staging — that label is what makes the merge deploy', async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const f = (async (url: string, init: RequestInit) => {
+      calls.push({ url, body: init.body ? JSON.parse(init.body as string) : null });
+      const payload = url.endsWith('/pulls')
+        ? { number: 7, html_url: 'https://github.com/org/repo/pull/7' }
+        : [{ name: DEPLOY_LABEL }];
+      return { ok: true, status: 201, text: async () => JSON.stringify(payload) };
+    }) as never;
+    const r = await openPr(
+      { repoUrl: 'https://github.com/org/repo.git', head: 'eng/x', title: 'T' },
+      f,
+      GH_ENV,
+    );
+    expect(calls[1].url).toBe('https://api.github.com/repos/org/repo/issues/7/labels');
+    expect(calls[1].body).toEqual({ labels: [DEPLOY_LABEL] });
+    expect(r.labels).toEqual([DEPLOY_LABEL]);
+    expect(r.labelError).toBeUndefined();
+  });
+
+  it('keeps the PR when labelling fails, and reports why', async () => {
+    const f = (async (url: string) => {
+      if (url.endsWith('/pulls')) {
+        return {
+          ok: true,
+          status: 201,
+          text: async () => JSON.stringify({ number: 7, html_url: 'u' }),
+        };
+      }
+      return { ok: false, status: 403, text: async () => '{"message":"Resource not accessible"}' };
+    }) as never;
+    const r = await openPr(
+      { repoUrl: 'https://github.com/org/repo.git', head: 'eng/x', title: 'T' },
+      f,
+      GH_ENV,
+    );
+    // The pull request is the durable result — never lose it over a label.
+    expect(r.number).toBe(7);
+    expect(r.labels).toEqual([]);
+    expect(r.labelError).toContain('403');
   });
   it('surfaces a GitHub error', async () => {
     const f = fakeFetch(422, '{"message":"No commits between main and eng/x"}');
