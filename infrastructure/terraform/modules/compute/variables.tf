@@ -139,3 +139,14 @@ variable "paperclip_disable_signup" {
   type        = bool
   default     = true
 }
+
+variable "paperclip_secret_prefix" {
+  description = <<-EOT
+    Name prefix for the secrets Paperclip manages in AWS Secrets Manager through its
+    own provider (`aws_secrets_manager`). Must match the `secretNamePrefix` configured
+    in Paperclip, or the IAM grant and the provider will disagree and every resolution
+    will fail with AccessDenied. Paperclip's own default is "paperclip".
+  EOT
+  type        = string
+  default     = "paperclip"
+}
