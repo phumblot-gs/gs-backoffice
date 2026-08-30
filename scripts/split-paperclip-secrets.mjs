@@ -48,18 +48,29 @@ const aws = (...argv) =>
     maxBuffer: 32 * 1024 * 1024,
   });
 
-/** Read a secret's value. Returns null when the secret does not exist. */
+/**
+ * Read a secret's value. Returns null when the secret does not exist.
+ *
+ * `--output json` rather than `text` on purpose. Text output appends a trailing
+ * newline, so the value read back is never byte-identical to the value stored — which
+ * silently broke the placeholder check below and made every target look "already set".
+ * JSON output round-trips the string exactly, including a PEM's internal newlines and
+ * any trailing whitespace a secret legitimately contains. Trimming would have hidden
+ * the bug rather than fixed it, and would corrupt a secret that ends in a space.
+ */
 function readSecret(secretId) {
   try {
-    return aws(
-      'secretsmanager',
-      'get-secret-value',
-      '--secret-id',
-      secretId,
-      '--query',
-      'SecretString',
-      '--output',
-      'text',
+    return JSON.parse(
+      aws(
+        'secretsmanager',
+        'get-secret-value',
+        '--secret-id',
+        secretId,
+        '--query',
+        'SecretString',
+        '--output',
+        'json',
+      ),
     );
   } catch {
     return null;
