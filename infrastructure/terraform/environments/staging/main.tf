@@ -79,6 +79,8 @@ module "compute" {
   db_secret_arn   = module.database.db_secret_arn
   app_secrets_arn = module.secrets.app_secrets_arn
 
+  paperclip_resolved_secret_path = module.secrets.paperclip_secret_path_prefix
+
   paperclip_cpu               = var.paperclip_cpu
   paperclip_memory            = var.paperclip_memory
   paperclip_allowed_hostnames = "${var.paperclip_domain},${var.mcp_domain}"
