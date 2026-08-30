@@ -150,3 +150,13 @@ variable "paperclip_secret_prefix" {
   type        = string
   default     = "paperclip"
 }
+
+variable "paperclip_resolved_secret_path" {
+  description = <<-EOT
+    Secrets Manager path holding the secrets Paperclip resolves as EXTERNAL references
+    — values we own in Terraform, that Paperclip reads but never writes. Distinct from
+    `paperclip_secret_prefix`, which is where Paperclip stores secrets it manages
+    itself. Both are granted; they answer different questions.
+  EOT
+  type        = string
+}
