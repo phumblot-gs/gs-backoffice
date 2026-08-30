@@ -177,7 +177,12 @@ resource "aws_iam_role_policy" "ecs_task_secrets" {
           "secretsmanager:TagResource"
         ]
         Resource = [
-          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.paperclip_secret_prefix}/*"
+          # Secrets Paperclip creates itself (managedMode = paperclip_managed).
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.paperclip_secret_prefix}/*",
+          # Secrets WE own in Terraform and Paperclip only reads
+          # (managedMode = external_reference). Read-only in practice: Paperclip has
+          # no reason to write here, but the actions are shared with the block above.
+          "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.paperclip_resolved_secret_path}/*"
         ]
       },
       {
