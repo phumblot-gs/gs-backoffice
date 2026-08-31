@@ -56,6 +56,12 @@ const manifest: PaperclipPluginManifestV1 = {
   //
   // The `*Token` fields hold Paperclip secret REFERENCES (`format: 'secret-ref'`) —
   // never a value. They are resolved at call time via `ctx.secrets.resolve()`.
+  //
+  // Deliberately no `type`. The board's secret picker submits an EnvSecretRefBinding
+  // OBJECT — `{ type: 'secret_ref', secretId, version }` — so declaring `type: 'string'`
+  // made Ajv reject every save with "Configuration does not match the plugin's
+  // instanceConfigSchema". `format` alone still drives the picker, and Ajv applies a
+  // format only to strings, so both the object and a bare UUID pass.
   // The `*Env` fields below are the legacy path: env-var NAMES read from the worker
   // env passthrough. A reference wins when both are set; the env name is the fallback
   // so nothing breaks before an operator fills the references in.
@@ -63,31 +69,26 @@ const manifest: PaperclipPluginManifestV1 = {
     type: 'object',
     properties: {
       spritesToken: {
-        type: 'string',
         format: 'secret-ref',
         description:
           'Fly Sprites API token, as a Paperclip secret reference. Preferred over spritesTokenEnv.',
       },
       githubToken: {
-        type: 'string',
         format: 'secret-ref',
         description:
           'Combined GitHub token as a secret reference, used when no read/push split is set. Preferred over githubTokenEnv.',
       },
       githubReadToken: {
-        type: 'string',
         format: 'secret-ref',
         description:
           'Read-only GitHub token as a secret reference. Preferred over githubReadTokenEnv.',
       },
       githubPushToken: {
-        type: 'string',
         format: 'secret-ref',
         description:
           'Push-capable GitHub token as a secret reference. Preferred over githubPushTokenEnv.',
       },
       anthropicKey: {
-        type: 'string',
         format: 'secret-ref',
         description: 'Anthropic API key as a secret reference. Preferred over anthropicKeyEnv.',
       },
