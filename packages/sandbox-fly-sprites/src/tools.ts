@@ -140,7 +140,15 @@ export async function resolveSecret(
   if (ref && (typeof ref === 'string' || typeof ref === 'object')) {
     try {
       const value = await ctx.secrets.resolve(ref as Parameters<typeof ctx.secrets.resolve>[0]);
-      if (value && value.trim()) return value;
+      if (value && value.trim()) {
+        // Positive signal, on purpose. Only failures were logged, so "no warning" was
+        // compatible with two opposite realities: the reference resolved, or the worker
+        // never saw one and took the env fallback silently. The env path is due to be
+        // removed — deciding that on an ambiguous signal is how a credential goes
+        // missing. Never logs the value, only which field resolved.
+        ctx.logger.info('secret resolved from the Paperclip store', { refKey });
+        return value;
+      }
       ctx.logger.warn('secret reference resolved to an empty value — falling back to the env', {
         refKey,
       });
