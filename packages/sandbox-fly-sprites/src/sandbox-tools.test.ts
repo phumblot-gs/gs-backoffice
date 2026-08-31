@@ -413,6 +413,15 @@ describe('jobCompanyId (scheduled jobs carry no company of their own)', () => {
     expect(jobCompanyId(ctx)).toBe('company-uuid');
   });
 
+  it('treats the Terraform placeholder as unset', () => {
+    const { ctx, warns } = mkCtx();
+    vi.stubEnv('PAPERCLIP_COMPANY_ID', 'CHANGE_ME');
+    // Injected from the shared app secret, whose declared default is this literal.
+    // Passing it through would yield an empty config and no warning at all.
+    expect(jobCompanyId(ctx)).toBeUndefined();
+    expect(warns[0]?.msg).toMatch(/PAPERCLIP_COMPANY_ID is unset/);
+  });
+
   it('warns loudly when unset instead of falling back in silence', () => {
     const { ctx, warns } = mkCtx();
     vi.stubEnv('PAPERCLIP_COMPANY_ID', '');

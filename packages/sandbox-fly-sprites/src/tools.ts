@@ -191,7 +191,11 @@ export async function resolveSecret(
 export function jobCompanyId(ctx: PluginContext): string | undefined {
   const raw = process.env.PAPERCLIP_COMPANY_ID;
   const value = typeof raw === 'string' ? raw.trim() : '';
-  if (!value) {
+  // The Terraform placeholder counts as unset. It is injected from the shared app
+  // secret, whose declared default is the literal "CHANGE_ME"; treating it as a real
+  // company id would send an unusable value to config.get() and produce an empty
+  // config — the exact silent-empty-config failure this function exists to surface.
+  if (!value || value === 'CHANGE_ME') {
     ctx.logger.warn(
       'PAPERCLIP_COMPANY_ID is unset — scheduled jobs cannot read company-scoped ' +
         'plugin config, so secret references will be ignored and only env vars will be used',
