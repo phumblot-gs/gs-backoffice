@@ -5,8 +5,12 @@
  * `backoffice.notify.google_chat` event → the notify-consumer → the "general" channel.
  *
  * Repos are taken from the baked rbac.json `repos` map (the same source as the
- * per-PR review notification). GitHub is read-only; EVT/GitHub creds come from the
- * worker env (forwarded by the ADAPTER_ENV_PASSTHROUGH patch).
+ * per-PR review notification). GitHub is read-only.
+ *
+ * Credentials are passed in ALREADY RESOLVED, never read from the environment here.
+ * That is what lets the caller source them from Paperclip's secret store instead of
+ * the ADAPTER_ENV_PASSTHROUGH patch: this module no longer cares where they came
+ * from, so retiring the patch is a change at one call site rather than in here.
  */
 import { readFileSync } from 'node:fs';
 import { EvtClient } from '@gs-backoffice/evt-client';
@@ -110,24 +114,68 @@ export function buildDigestText(prs: ReviewPr[], failures: RepoFailure[] = []): 
 }
 
 /**
+ * What publishing an EVT event needs, resolved. `apiKey` is the only secret; the
+ * other three are configuration and legitimately stay in the environment.
+ */
+export interface EvtCredentials {
+  baseUrl: string;
+  apiKey: string;
+  accountId: string;
+  environment: 'production' | 'staging';
+}
+
+/**
+ * Build EVT credentials from the non-secret configuration in the environment plus a
+ * separately-sourced API key.
+ *
+ * The split is deliberate. `EVT_API_URL`, `EVT_ACCOUNT_ID` and `NODE_ENV` are
+ * configuration and stay in the environment; only the key is a secret, and it arrives
+ * from wherever the caller resolved it — Paperclip's store or, until the migration
+ * completes, `EVT_API_KEY`.
+ *
+ * Reading the key from the same env blob as the config would quietly couple the two:
+ * removing `EVT_API_KEY` from the container would then also lose a perfectly good
+ * resolved key, and the digest would go silent for a reason nothing in the code
+ * suggests. That is the whole failure this refactor exists to prevent, so the seam is
+ * placed where the removal will actually happen.
+ *
+ * Returns undefined when anything required is missing, so a caller cannot mistake an
+ * unconfigured EVT for a working one.
+ */
+export function evtCredentialsFromEnv(
+  env: NodeJS.ProcessEnv,
+  apiKeyOverride?: string,
+): EvtCredentials | undefined {
+  const baseUrl = (env.EVT_API_URL || '').trim();
+  const apiKey = (apiKeyOverride || env.EVT_API_KEY || '').trim();
+  const accountId = (env.EVT_ACCOUNT_ID || '').trim();
+  if (!baseUrl || !apiKey || !accountId) return undefined;
+  return {
+    baseUrl,
+    apiKey,
+    accountId,
+    environment: env.NODE_ENV === 'production' ? 'production' : 'staging',
+  };
+}
+
+/**
  * Emit a backoffice.notify.google_chat event via the shared EvtClient (best-effort).
  * Returns true on success; never throws.
  */
 export async function emitChatNotify(
   text: string,
   scope: string,
-  env: NodeJS.ProcessEnv,
+  evt: EvtCredentials | undefined,
 ): Promise<boolean> {
-  const baseUrl = (env.EVT_API_URL || '').trim();
-  const apiKey = (env.EVT_API_KEY || '').trim();
-  const accountId = (env.EVT_ACCOUNT_ID || '').trim();
+  if (!evt) return false;
+  const { baseUrl, apiKey, accountId } = evt;
   if (!baseUrl || !apiKey || !accountId) return false;
   const event = createBackofficeEvent(
     'backoffice.notify.google_chat',
     { userId: 'pr-review-digest', accountId, role: 'system' },
     { accountId, resourceType: 'digest', resourceId: 'pr-review' },
     { text, scope },
-    env.NODE_ENV === 'production' ? 'production' : 'staging',
+    evt.environment,
   );
   try {
     await new EvtClient({ baseUrl, apiKey }).publish(event);
@@ -140,7 +188,9 @@ export async function emitChatNotify(
 export interface DigestDeps {
   rbacPath: string;
   token: string;
-  env: NodeJS.ProcessEnv;
+  /** Resolved EVT credentials. Undefined means "not configured" — the digest still
+   *  runs and reports, it just cannot publish, and says so via `sent: false`. */
+  evt: EvtCredentials | undefined;
   fetchImpl?: FetchLike;
   logger?: { warn?: (message: string, meta?: Record<string, unknown>) => void };
 }
@@ -175,6 +225,6 @@ export async function runPrReviewDigest(
       deps.logger?.warn?.('pr-review-digest: repo failed', { repo, error });
     }
   }
-  const sent = await emitChatNotify(buildDigestText(all, failed), 'general', deps.env);
+  const sent = await emitChatNotify(buildDigestText(all, failed), 'general', deps.evt);
   return { repos: repos.length, prs: all.length, sent, failed };
 }

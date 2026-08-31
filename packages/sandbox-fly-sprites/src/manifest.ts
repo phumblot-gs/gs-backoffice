@@ -95,6 +95,11 @@ const manifest: PaperclipPluginManifestV1 = {
         format: 'secret-ref',
         description: 'Anthropic API key as a secret reference. Preferred over anthropicKeyEnv.',
       },
+      evtApiKey: {
+        format: 'secret-ref',
+        description:
+          'EVT API key as a secret reference, used by the PR-review digest to publish its Google Chat notification. Preferred over evtApiKeyEnv.',
+      },
       spritesTokenEnv: {
         type: 'string',
         description: 'Env var name holding the Fly Sprites API token (default SPRITES_TOKEN).',
@@ -117,6 +122,11 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           'Env var name for a push-capable GitHub token (sandbox_code_task). Falls back to the combined token.',
         default: 'SANDBOX_GITHUB_PUSH_TOKEN',
+      },
+      evtApiKeyEnv: {
+        type: 'string',
+        description: 'Env var name holding the EVT API key (default EVT_API_KEY).',
+        default: 'EVT_API_KEY',
       },
       reaperTtlDays: {
         type: 'number',
