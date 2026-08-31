@@ -245,6 +245,10 @@ resource "aws_ecs_task_definition" "paperclip" {
       # the bridge as a fallback — NOT bound to a Paperclip workspace, which would make the
       # host attempt a git clone each run (we keep all code execution in the Fly sandbox).
       { name = "BACKOFFICE_REPO_URL", value = var.backoffice_repo_url },
+      # Company whose plugin config the scheduled jobs read. A job carries no company
+      # to derive, so without this the reaper and the PR-review digest read an empty
+      # config and silently ignore every secret reference. See the variable.
+      { name = "PAPERCLIP_COMPANY_ID", value = var.paperclip_company_id },
     ]
     secrets = [
       {

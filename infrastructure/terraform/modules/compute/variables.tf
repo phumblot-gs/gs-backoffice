@@ -160,3 +160,24 @@ variable "paperclip_resolved_secret_path" {
   EOT
   type        = string
 }
+
+variable "paperclip_company_id" {
+  description = <<-EOT
+    UUID of the Paperclip company whose plugin configuration the SCHEDULED JOBS read.
+
+    Plugin config is company-scoped. A tool call carries a company (ToolRunContext),
+    so the host derives it; a scheduled job does not (PluginJobContext has only
+    jobKey / runId / trigger / scheduledAt), and `ctx.config.get()` with no argument
+    then returns the UNSCOPED config — empty. Every secret reference an operator saved
+    on the board is invisible to the job, which falls back to env vars without a word.
+
+    This is an identifier, not a credential: it already appears in the board URL and
+    in the ALB access logs. It stays in the container env as bootstrap configuration
+    while the secrets themselves move to Paperclip-resolved references.
+
+    Empty is allowed and the jobs still run — on env vars only — but they log a
+    warning saying so.
+  EOT
+  type        = string
+  default     = ""
+}
