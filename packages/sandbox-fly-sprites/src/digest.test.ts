@@ -10,6 +10,7 @@ import {
   runPrReviewDigest,
   summarizeError,
   type ReviewPr,
+  evtCredentialsFromEnv,
 } from './digest.js';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -19,6 +20,14 @@ const EVT_ENV = {
   EVT_API_KEY: 'k',
   EVT_ACCOUNT_ID: '16',
 } as NodeJS.ProcessEnv;
+
+/** Config without the key — what the container looks like once EVT_API_KEY is gone. */
+const EVT_ENV_NO_KEY = {
+  EVT_API_URL: 'https://evt',
+  EVT_ACCOUNT_ID: '16',
+} as NodeJS.ProcessEnv;
+
+const EVT_CREDS = evtCredentialsFromEnv(EVT_ENV);
 
 function rbacFile(repos?: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'rbac-'));
@@ -109,18 +118,47 @@ describe('summarizeError', () => {
   });
 });
 
+describe('evtCredentialsFromEnv (the key is sourced separately from the config)', () => {
+  it('builds credentials from the env', () => {
+    expect(evtCredentialsFromEnv(EVT_ENV)).toEqual({
+      baseUrl: 'https://evt',
+      apiKey: 'k',
+      accountId: '16',
+      environment: 'staging',
+    });
+  });
+
+  it('takes a resolved key even when the env has none', () => {
+    // The point of the migration: EVT_API_KEY leaves the container while the URL and
+    // account id stay. Coupling the two would silently disable the digest.
+    expect(evtCredentialsFromEnv(EVT_ENV_NO_KEY, 'from-store')?.apiKey).toBe('from-store');
+  });
+
+  it('prefers the resolved key over the env one', () => {
+    expect(evtCredentialsFromEnv(EVT_ENV, 'from-store')?.apiKey).toBe('from-store');
+  });
+
+  it('is undefined when the key is missing everywhere', () => {
+    expect(evtCredentialsFromEnv(EVT_ENV_NO_KEY)).toBeUndefined();
+  });
+
+  it('is undefined when the non-secret config is missing', () => {
+    expect(evtCredentialsFromEnv({} as NodeJS.ProcessEnv, 'from-store')).toBeUndefined();
+  });
+});
+
 describe('emitChatNotify (via shared EvtClient)', () => {
-  it('publishes a notify event when EVT env is set', async () => {
+  it('publishes a notify event when EVT credentials are set', async () => {
     const cap = stubEvtFetch();
-    expect(await emitChatNotify('hello', 'general', EVT_ENV)).toBe(true);
+    expect(await emitChatNotify('hello', 'general', EVT_CREDS)).toBe(true);
     expect(cap.url).toBe('https://evt/v1/events');
     const body = JSON.parse(cap.body as string);
     expect(body.eventType).toBe('backoffice.notify.google_chat');
     expect(body.payload).toEqual({ text: 'hello', scope: 'general' });
     expect(body.actor).toMatchObject({ userId: 'pr-review-digest', accountId: '16' });
   });
-  it('no-ops (false) when EVT env missing', async () => {
-    expect(await emitChatNotify('x', 'general', {} as NodeJS.ProcessEnv)).toBe(false);
+  it('no-ops (false) when EVT is not configured', async () => {
+    expect(await emitChatNotify('x', 'general', undefined)).toBe(false);
   });
 });
 
@@ -142,7 +180,7 @@ describe('runPrReviewDigest', () => {
     const res = await runPrReviewDigest({
       rbacPath: rbacFile({ 'org/repo': 'general' }),
       token: 'tok',
-      env: EVT_ENV,
+      evt: EVT_CREDS,
       fetchImpl: ghFetch,
     });
     expect(res).toEqual({ repos: 1, prs: 1, sent: true, failed: [] });
@@ -157,7 +195,7 @@ describe('runPrReviewDigest', () => {
     const res = await runPrReviewDigest({
       rbacPath: rbacFile({ 'org/repo': 'general' }),
       token: 'tok',
-      env: EVT_ENV,
+      evt: EVT_CREDS,
       fetchImpl: ghFetch,
       logger: { warn: (m) => warns.push(m) },
     });
@@ -176,7 +214,7 @@ describe('runPrReviewDigest', () => {
     const res = await runPrReviewDigest({
       rbacPath: '/no/such.json',
       token: 'tok',
-      env: EVT_ENV,
+      evt: EVT_CREDS,
       fetchImpl: (async () => ({ ok: true, status: 200, text: async () => '[]' })) as never,
     });
     expect(res.repos).toBe(0);
