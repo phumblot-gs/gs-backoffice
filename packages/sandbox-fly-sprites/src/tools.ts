@@ -2,7 +2,7 @@ import type { PluginContext, ToolResult, ScopeKey } from '@paperclipai/plugin-sd
 import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
-import { runPrReviewDigest, emitChatNotify } from './digest.js';
+import { runPrReviewDigest, emitChatNotify, evtCredentialsFromEnv } from './digest.js';
 import { resolveGitHubToken } from '@gs-backoffice/github-app';
 
 /**
@@ -651,6 +651,24 @@ export function registerSandboxTools(ctx: PluginContext): void {
         )),
       ctx.logger,
     );
+    // EVT credentials, resolved once: a secret reference for the key when the operator
+    // has configured one, the env otherwise. Reading the env is now an explicit decision
+    // here rather than a hidden default inside emitChatNotify — which is what makes the
+    // passthrough patch removable at this line instead of inside the digest module.
+    const evtApiKey = await resolveSecret(
+      ctx,
+      cfg,
+      'evtApiKey',
+      'evtApiKeyEnv',
+      'EVT_API_KEY',
+      companyId,
+    );
+    const evt = evtCredentialsFromEnv(process.env, evtApiKey);
+    if (!evt) {
+      // Not fatal: the digest still runs and logs. But a digest nobody receives is the
+      // failure mode this job exists to prevent, so it must not pass unremarked.
+      ctx.logger.warn('pr-review-digest: EVT is not configured — the digest cannot be posted');
+    }
     if (!token) {
       ctx.logger.error(`${JOB_FAILURE_MARKER} pr-review-digest: no GitHub credential`, {
         expected:
@@ -659,12 +677,12 @@ export function registerSandboxTools(ctx: PluginContext): void {
       await emitChatNotify(
         "🚨 Digest PR indisponible : aucun identifiant GitHub n'est configuré. Le statut des revues est INCONNU.",
         'general',
-        process.env,
+        evt,
       );
       return;
     }
     const rbacPath = (process.env.GS_RBAC_PATH || '/opt/gs-agent-tools/rbac.json').trim();
-    const res = await runPrReviewDigest({ rbacPath, token, env: process.env, logger: ctx.logger });
+    const res = await runPrReviewDigest({ rbacPath, token, evt, logger: ctx.logger });
     if (res.failed.length > 0) {
       ctx.logger.error(
         `${JOB_FAILURE_MARKER} pr-review-digest: ${res.failed.length} source(s) unreachable`,
