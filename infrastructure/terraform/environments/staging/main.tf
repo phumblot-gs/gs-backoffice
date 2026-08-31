@@ -87,8 +87,6 @@ module "compute" {
   paperclip_public_url        = "https://${var.paperclip_domain}"
   mcp_cpu                     = var.mcp_cpu
   mcp_memory                  = var.mcp_memory
-
-  paperclip_company_id = var.paperclip_company_id
 }
 
 # -----------------------------------------------------------------------------

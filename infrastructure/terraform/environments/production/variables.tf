@@ -84,14 +84,3 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
-
-variable "paperclip_company_id" {
-  description = <<-EOT
-    Company whose plugin configuration the SCHEDULED JOBS read (sandbox reaper,
-    PR-review digest). Plugin config is company-scoped and a job carries no company to
-    derive, so without this the jobs read an empty config and ignore every secret
-    reference saved on the board. An identifier, not a credential.
-  EOT
-  type        = string
-  default     = ""
-}
