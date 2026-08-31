@@ -285,29 +285,35 @@ describe('resolveGitHubCredential (App-first credential selection)', () => {
 describe('resolveSecret (native secret store first, env as fallback)', () => {
   const mkCtx = () => {
     const warns: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+    const infos: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
     const make = (resolve: (ref: unknown) => Promise<string>) =>
       ({
         secrets: { resolve },
         logger: {
-          info: () => {},
+          info: (msg: string, meta?: Record<string, unknown>) => infos.push({ msg, meta }),
           warn: (msg: string, meta?: Record<string, unknown>) => warns.push({ msg, meta }),
           error: () => {},
           debug: () => {},
         },
       }) as unknown as PluginContext;
-    return { warns, make };
+    return { warns, infos, make };
   };
 
   afterEach(() => vi.unstubAllEnvs());
 
-  it('uses the resolved reference and never reads the env', async () => {
-    const { make } = mkCtx();
+  it('uses the resolved reference, never reads the env, and says which field resolved', async () => {
+    const { make, infos } = mkCtx();
     vi.stubEnv('SPRITES_TOKEN', 'from-env');
     const ctx = make(async () => 'from-store');
     const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
     await expect(
       resolveSecret(ctx, cfg, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
     ).resolves.toBe('from-store');
+    // Without this, "no warning" cannot distinguish a resolved reference from a
+    // silent env fallback — and the env path is what we intend to remove.
+    expect(infos[0]?.msg).toMatch(/resolved from the Paperclip store/);
+    expect(infos[0]?.meta).toMatchObject({ refKey: 'spritesToken' });
+    expect(JSON.stringify(infos)).not.toContain('from-store');
   });
 
   it('falls back to the env when the reference fails to resolve, and says so', async () => {
