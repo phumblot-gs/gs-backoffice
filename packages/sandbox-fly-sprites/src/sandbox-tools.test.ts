@@ -16,6 +16,7 @@ import {
   reapIdleSandboxes,
   resolveGitHubCredential,
   resolveSecret,
+  jobCompanyId,
 } from './tools.js';
 import type { PluginContext } from '@paperclipai/plugin-sdk';
 
@@ -286,9 +287,15 @@ describe('resolveSecret (native secret store first, env as fallback)', () => {
   const mkCtx = () => {
     const warns: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
     const infos: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+    const resolveCalls: Array<{ ref: unknown; options?: unknown }> = [];
     const make = (resolve: (ref: unknown) => Promise<string>) =>
       ({
-        secrets: { resolve },
+        secrets: {
+          resolve: (ref: unknown, options?: unknown) => {
+            resolveCalls.push({ ref, options });
+            return resolve(ref);
+          },
+        },
         logger: {
           info: (msg: string, meta?: Record<string, unknown>) => infos.push({ msg, meta }),
           warn: (msg: string, meta?: Record<string, unknown>) => warns.push({ msg, meta }),
@@ -296,7 +303,7 @@ describe('resolveSecret (native secret store first, env as fallback)', () => {
           debug: () => {},
         },
       }) as unknown as PluginContext;
-    return { warns, infos, make };
+    return { warns, infos, make, resolveCalls };
   };
 
   afterEach(() => vi.unstubAllEnvs());
@@ -349,5 +356,70 @@ describe('resolveSecret (native secret store first, env as fallback)', () => {
       resolveSecret(ctx, {}, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN'),
     ).resolves.toBe('from-env');
     expect(warns).toHaveLength(0);
+  });
+
+  it('forwards the company to the secret store, because config is company-scoped', async () => {
+    const { make, resolveCalls } = mkCtx();
+    const ctx = make(async () => 'from-store');
+    const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
+    await resolveSecret(
+      ctx,
+      cfg,
+      'spritesToken',
+      'spritesTokenEnv',
+      'SPRITES_TOKEN',
+      'company-uuid',
+    );
+    expect(resolveCalls[0]?.options).toEqual({ companyId: 'company-uuid' });
+  });
+
+  it('omits the options argument entirely when no company is given', async () => {
+    const { make, resolveCalls } = mkCtx();
+    const ctx = make(async () => 'from-store');
+    const cfg = { spritesToken: { type: 'secret_ref', secretId: 'abc' } };
+    await resolveSecret(ctx, cfg, 'spritesToken', 'spritesTokenEnv', 'SPRITES_TOKEN');
+    // A tool call runs host-scoped: the host derives the company itself. Passing
+    // `{ companyId: undefined }` would be a different call than passing nothing.
+    expect(resolveCalls[0]?.options).toBeUndefined();
+  });
+});
+
+describe('jobCompanyId (scheduled jobs carry no company of their own)', () => {
+  const mkCtx = () => {
+    const warns: Array<{ msg: string }> = [];
+    const ctx = {
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warns.push({ msg }),
+        error: () => {},
+        debug: () => {},
+      },
+    } as unknown as PluginContext;
+    return { ctx, warns };
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('returns the configured company', () => {
+    const { ctx, warns } = mkCtx();
+    vi.stubEnv('PAPERCLIP_COMPANY_ID', 'company-uuid');
+    expect(jobCompanyId(ctx)).toBe('company-uuid');
+    expect(warns).toHaveLength(0);
+  });
+
+  it('trims surrounding whitespace', () => {
+    const { ctx } = mkCtx();
+    vi.stubEnv('PAPERCLIP_COMPANY_ID', '  company-uuid\n');
+    expect(jobCompanyId(ctx)).toBe('company-uuid');
+  });
+
+  it('warns loudly when unset instead of falling back in silence', () => {
+    const { ctx, warns } = mkCtx();
+    vi.stubEnv('PAPERCLIP_COMPANY_ID', '');
+    expect(jobCompanyId(ctx)).toBeUndefined();
+    // The whole failure being fixed here was invisible: an unscoped config looks
+    // exactly like a config nobody ever filled in. Silence is the bug.
+    expect(warns[0]?.msg).toMatch(/PAPERCLIP_COMPANY_ID is unset/);
+    expect(warns[0]?.msg).toMatch(/secret references will be ignored/);
   });
 });
