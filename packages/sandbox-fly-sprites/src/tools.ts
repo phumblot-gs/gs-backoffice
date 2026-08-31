@@ -135,11 +135,15 @@ export async function resolveSecret(
   refKey: string,
   envOverrideKey: string,
   defaultEnvName: string,
+  companyId?: string,
 ): Promise<string | undefined> {
   const ref = cfg[refKey];
   if (ref && (typeof ref === 'string' || typeof ref === 'object')) {
     try {
-      const value = await ctx.secrets.resolve(ref as Parameters<typeof ctx.secrets.resolve>[0]);
+      const value = await ctx.secrets.resolve(
+        ref as Parameters<typeof ctx.secrets.resolve>[0],
+        companyId ? { companyId } : undefined,
+      );
       if (value && value.trim()) {
         // Positive signal, on purpose. Only failures were logged, so "no warning" was
         // compatible with two opposite realities: the reference resolved, or the worker
@@ -160,6 +164,41 @@ export async function resolveSecret(
     }
   }
   return envSecret(cfg, envOverrideKey, defaultEnvName);
+}
+
+/**
+ * The company a scheduled job runs for.
+ *
+ * Plugin config is company-scoped. `ctx.config.get()` can only derive the company
+ * during a host-scoped invocation — a tool call, where `ToolRunContext` carries a
+ * `companyId`. `PluginJobContext` carries none (`jobKey`, `runId`, `trigger`,
+ * `scheduledAt`), so a scheduled job that calls `get()` with no argument reads the
+ * UNSCOPED config: empty. Every secret reference an operator saved on the board is
+ * invisible, and every lookup falls through to the env — silently, because a config
+ * with no reference in it is indistinguishable from one that was never configured.
+ *
+ * That is not hypothetical: it is exactly what the reaper did on 2026-08-31, after
+ * the references were saved and confirmed with a 200. Nothing in the logs said so
+ * until a success line was added to `resolveSecret`.
+ *
+ * The company id is an identifier, not a credential — it is already in the board URL
+ * and the ALB access logs — so it stays in the container env as bootstrap config
+ * while the secrets themselves move to references.
+ *
+ * Returns undefined and says so loudly when unset. A silent fallback here would
+ * rebuild the exact trap this function exists to close.
+ */
+export function jobCompanyId(ctx: PluginContext): string | undefined {
+  const raw = process.env.PAPERCLIP_COMPANY_ID;
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (!value) {
+    ctx.logger.warn(
+      'PAPERCLIP_COMPANY_ID is unset — scheduled jobs cannot read company-scoped ' +
+        'plugin config, so secret references will be ignored and only env vars will be used',
+    );
+    return undefined;
+  }
+  return value;
 }
 
 /**
@@ -555,7 +594,10 @@ export function registerSandboxTools(ctx: PluginContext): void {
 
   // Idle reaper: backstop to sandbox_release, bounds cold-storage cost.
   ctx.jobs.register('sandbox-reaper', async () => {
-    const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+    // Explicit company: a job has none to derive, so an unscoped get() reads an empty
+    // config and every secret reference is invisible. See jobCompanyId.
+    const companyId = jobCompanyId(ctx);
+    const cfg = await ctx.config.get(companyId).catch(() => ({}) as Record<string, unknown>);
     const ttlDays =
       typeof cfg.reaperTtlDays === 'number' && cfg.reaperTtlDays > 0 ? cfg.reaperTtlDays : 7;
     const spritesToken = await resolveSecret(
@@ -564,6 +606,7 @@ export function registerSandboxTools(ctx: PluginContext): void {
       'spritesToken',
       'spritesTokenEnv',
       'SPRITES_TOKEN',
+      companyId,
     );
     if (!spritesToken) {
       ctx.logger.warn('sandbox-reaper: SPRITES_TOKEN unavailable, skipping');
@@ -578,7 +621,10 @@ export function registerSandboxTools(ctx: PluginContext): void {
   // swallow per-repo errors and still post "aucune PR en attente", which is how a dead
   // GitHub token went unnoticed for weeks.
   ctx.jobs.register('pr-review-digest', async () => {
-    const cfg = await ctx.config.get().catch(() => ({}) as Record<string, unknown>);
+    // Explicit company, same reason as the reaper — and it matters most here: this is
+    // the job that posted "aucune PR en attente" for a month on a dead token.
+    const companyId = jobCompanyId(ctx);
+    const cfg = await ctx.config.get(companyId).catch(() => ({}) as Record<string, unknown>);
     // Reads GitHub as the App when it is configured — the read PAT this used to depend
     // on expired silently and took the digest with it.
     const token = await resolveGitHubCredential(
@@ -589,8 +635,16 @@ export function registerSandboxTools(ctx: PluginContext): void {
           'githubReadToken',
           'githubReadTokenEnv',
           'SANDBOX_GITHUB_READ_TOKEN',
+          companyId,
         )) ??
-        (await resolveSecret(ctx, cfg, 'githubToken', 'githubTokenEnv', 'SANDBOX_GITHUB_TOKEN')),
+        (await resolveSecret(
+          ctx,
+          cfg,
+          'githubToken',
+          'githubTokenEnv',
+          'SANDBOX_GITHUB_TOKEN',
+          companyId,
+        )),
       ctx.logger,
     );
     if (!token) {

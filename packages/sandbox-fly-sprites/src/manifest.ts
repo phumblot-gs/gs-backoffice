@@ -25,7 +25,10 @@ const manifest: PaperclipPluginManifestV1 = {
   //     the only reason the env passthrough patch was written in the first place.
   //  2. The worker env passthrough (docker/patches/patch-paperclip-plugin-env.mjs),
   //     kept as a fallback so this migration deploys without a config change.
-  // The patch cannot be retired until the EVT and Paperclip API keys move over too.
+  // The patch cannot be retired until the EVT and Paperclip API keys move over too,
+  // AND PAPERCLIP_COMPANY_ID is set: plugin config is company-scoped, and a scheduled
+  // job carries no company to derive, so without it the reaper and the PR-review
+  // digest read an empty config and never see a reference at all.
   capabilities: [
     'agent.tools.register',
     'jobs.schedule',
