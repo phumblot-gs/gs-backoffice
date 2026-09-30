@@ -1,3 +1,9 @@
+import {
+  auditConfigured,
+  createAuditPublisher,
+  identifyAudit,
+  AUDIT_ENQUEUE_FAILURE,
+} from '@gs-backoffice/audit';
 /**
  * EVT emission from the bridge — used to notify (via the notify-consumer → Google
  * Chat) when a PR needs human review. Publishes through the shared
@@ -59,12 +65,14 @@ async function publishEvent(
   const apiKey = (env.EVT_API_KEY || '').trim();
   const accountId = (env.EVT_ACCOUNT_ID || '').trim();
 
-  const event = createBackofficeEvent(
-    eventType,
-    { userId: (env.PAPERCLIP_AGENT_ID || 'agent').trim(), accountId, role: 'agent' },
-    { accountId, resourceType: scope.resourceType, resourceId: scope.resourceId },
-    payload,
-    env.NODE_ENV === 'production' ? 'production' : 'staging',
+  const event = identifyAudit(
+    createBackofficeEvent(
+      eventType,
+      { userId: (env.PAPERCLIP_AGENT_ID || 'agent').trim(), accountId, role: 'agent' },
+      { accountId, resourceType: scope.resourceType, resourceId: scope.resourceId },
+      payload,
+      env.NODE_ENV === 'production' ? 'production' : 'staging',
+    ),
   );
 
   // Durable backstop (SOC2): always write the event to stderr — captured in the agent's
@@ -77,6 +85,15 @@ async function publishEvent(
     /* logging must never break the tool */
   }
 
+  if (auditConfigured(env) && eventType !== 'backoffice.notify.google_chat') {
+    try {
+      await createAuditPublisher(env)(event);
+      return true;
+    } catch {
+      console.error(JSON.stringify({ marker: AUDIT_ENQUEUE_FAILURE, eventId: event.eventId }));
+      return false;
+    }
+  }
   if (!baseUrl || !apiKey || !accountId) return false;
   try {
     await new EvtClient({ baseUrl, apiKey }).publish(event);

@@ -10,6 +10,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { createBackofficeEvent } from '@gs-backoffice/core';
+import {
+  auditConfigured,
+  createAuditPublisher,
+  auditedCall,
+  AUDIT_ENQUEUE_FAILURE,
+} from '@gs-backoffice/audit';
 import {
   readProxyConfig,
   executeSandboxTool,
@@ -42,9 +49,45 @@ async function withAudit(
   category: string,
   run: () => Promise<ToolReply>,
 ): Promise<ToolReply> {
-  const r = await run();
-  await emitToolInvoked(tool, category, !r.isError);
-  return r;
+  if (auditConfigured()) {
+    const accountId = process.env.EVT_ACCOUNT_ID || '';
+    const event = createBackofficeEvent(
+      'backoffice.audit.tool_invoked',
+      { userId: process.env.PAPERCLIP_AGENT_ID || 'agent', accountId, role: 'agent' },
+      { accountId, resourceType: 'tool', resourceId: tool },
+      {
+        tool,
+        category,
+        agentId: process.env.PAPERCLIP_AGENT_ID || '',
+        runId: process.env.PAPERCLIP_RUN_ID || '',
+        issueId: process.env.PAPERCLIP_TASK_ID || '',
+      },
+      process.env.NODE_ENV === 'production' ? 'production' : 'staging',
+    );
+    try {
+      return await auditedCall({
+        event,
+        sensitive: !['get_diff', 'get_issue'].includes(tool),
+        publish: createAuditPublisher(),
+        run,
+        isError: (r) => r.isError,
+        log: (audit) => console.error(JSON.stringify({ backoffice_audit: audit })),
+        failed: (phase, eventId) =>
+          console.error(JSON.stringify({ marker: AUDIT_ENQUEUE_FAILURE, phase, eventId })),
+      });
+    } catch (error) {
+      return textResult(error instanceof Error ? error.message : 'Tool failed', true);
+    }
+  }
+  // Local compatibility mode; deployed tasks require the durable queue.
+  try {
+    const r = await run();
+    await emitToolInvoked(tool, category, !r.isError);
+    return r;
+  } catch (error) {
+    await emitToolInvoked(tool, category, false);
+    throw error;
+  }
 }
 
 async function call(toolName: SandboxToolName, parameters: Record<string, unknown>) {
