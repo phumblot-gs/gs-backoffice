@@ -4,19 +4,24 @@ How every action taken through Henri — by an employee **or** by an agent in th
 self-development loop — is recorded, and **which store is authoritative for what**. This is
 the SOC 2 evidence map (CC6 logical access, CC7 monitoring, change management).
 
-Last updated: 2026-06-28, after the self-evolution loop was validated end-to-end and audited.
+Last updated: 2026-09-30, following a runtime durability check.
+
+**Deployment caveat:** on 2026-09-30, staging still used local-only run logs on
+ephemeral Fargate storage. Four historical run-log reads returned 404. The S3
+configuration below must be deployed and verified before treating bridge logs as
+a durable audit backstop. It cannot restore logs already lost with old tasks.
 
 ## 1. Four durable stores (defense in depth)
 
 No single store is the sole source of truth. An action is typically recorded in several,
 so a gap in one (e.g. EVT briefly unavailable) does not lose the trail.
 
-| Store                                             | What it holds                                                                                                                                                                     | Durability                                                                                              |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **EVT bus** (`backoffice.*` events)               | The primary, cross-system event stream (audit + lifecycle + business).                                                                                                            | Append stream, tenant-scoped by API key. **Emission is best-effort** (never throws).                    |
-| **CloudWatch** — MCP `audit_event` log            | **Every employee tool call** (`henri_*`): the `PluginManager` writes `logger.info({audit}, 'audit_event')` for each invocation, **independent of EVT**.                           | Durable; the SOC 2 backstop for the employee surface (CC7).                                             |
-| **Bridge run-log** (`backoffice_audit` on stderr) | **Every agent/bridge tool call + evolution event**: `publishEvent` always writes the event to stderr → captured in the Paperclip run-log, **before** the best-effort EVT publish. | Durable per-run (Paperclip run-log store). Added so the agent surface has parity with the MCP backstop. |
-| **Paperclip `activity_log`** (native)             | `approval.created/approved/rejected`, `budget.*` (threshold crossed / incident resolved), routine runs, issue status transitions.                                                 | Native, durable, independent of our code.                                                               |
+| Store                                             | What it holds                                                                                                                                                                     | Durability                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **EVT bus** (`backoffice.*` events)               | The primary, cross-system event stream (audit + lifecycle + business).                                                                                                            | Append stream, tenant-scoped by API key. **Emission is best-effort** (never throws). |
+| **CloudWatch** — MCP `audit_event` log            | **Every employee tool call** (`henri_*`): the `PluginManager` writes `logger.info({audit}, 'audit_event')` for each invocation, **independent of EVT**.                           | Durable; the SOC 2 backstop for the employee surface (CC7).                          |
+| **Bridge run-log** (`backoffice_audit` on stderr) | **Every agent/bridge tool call + evolution event**: `publishEvent` always writes the event to stderr → captured in the Paperclip run-log, **before** the best-effort EVT publish. | Local until S3 mirroring is deployed and verified; see the deployment caveat above.  |
+| **Paperclip `activity_log`** (native)             | `approval.created/approved/rejected`, `budget.*` (threshold crossed / incident resolved), routine runs, issue status transitions.                                                 | Native, durable, independent of our code.                                            |
 
 **Implication:** approval decisions and budget changes are recorded in **two or three** places
 (EVT + CloudWatch/run-log + native `activity_log`); the weakest single link (EVT-only) is the
@@ -78,6 +83,16 @@ recorded by name.
 - **Best-effort EVT emission**: an EVT outage drops the EVT copy (the event is never retried).
   Mitigated by the CloudWatch (MCP) and run-log (bridge) backstops, and the native `activity_log`
   for approvals/budget/routines.
+- **Run-log durability**: native Paperclip S3 mirroring copies completed logs and
+  in-flight output every 60 seconds. Upload failures do not fail the agent run;
+  a dedicated CloudWatch alarm reports them. Abrupt termination can lose the tail
+  since the last successful mirror, and a storage outage can lose more.
+  Current S3 objects have no automatic expiration; noncurrent snapshot versions
+  expire after 30 days. Versioning is recovery protection, not immutable storage.
+- **Shared task role**: the three ECS services currently share a task role, so
+  the new bucket permissions also apply to MCP and notify tasks. Object access is
+  limited to `run-logs/*`; the role cannot delete logs. Role separation is not
+  implemented by this change.
 - **Merge/deploy** events come from CI (`source.application = gs-backoffice-ci`); if a deploy is
   done manually outside the workflow, no `deploy.completed` is emitted.
 - See `multi-tenant-soc2-design.md` for the broader SOC 2 control map.

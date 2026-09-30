@@ -233,6 +233,11 @@ resource "aws_ecs_task_definition" "paperclip" {
       { name = "SERVE_UI", value = "true" },
       { name = "NODE_ENV", value = var.environment },
       { name = "PAPERCLIP_TELEMETRY_DISABLED", value = "1" },
+      { name = "RUN_LOG_S3_BUCKET", value = aws_s3_bucket.paperclip_run_logs.id },
+      { name = "RUN_LOG_S3_REGION", value = var.aws_region },
+      { name = "RUN_LOG_S3_PREFIX", value = "run-logs" },
+      { name = "RUN_LOG_S3_FORCE_PATH_STYLE", value = "false" },
+      { name = "RUN_LOG_S3_INFLIGHT_MIRROR_SECONDS", value = "60" },
       { name = "PAPERCLIP_ALLOWED_HOSTNAMES", value = var.paperclip_allowed_hostnames },
       { name = "PAPERCLIP_PUBLIC_URL", value = var.paperclip_public_url },
       # The ALB is internet-facing: keep public account creation closed (see the variable).
@@ -478,6 +483,14 @@ resource "aws_ecs_task_definition" "notify" {
 # ECS Services
 # -----------------------------------------------------------------------------
 resource "aws_ecs_service" "paperclip" {
+  # The first mirrored run must not race the bucket protections or IAM policy.
+  depends_on = [
+    aws_iam_role_policy.paperclip_run_logs,
+    aws_s3_bucket_public_access_block.paperclip_run_logs,
+    aws_s3_bucket_server_side_encryption_configuration.paperclip_run_logs,
+    aws_s3_bucket_versioning.paperclip_run_logs,
+    aws_s3_bucket_policy.paperclip_run_logs,
+  ]
   name            = "paperclip"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.paperclip.arn
