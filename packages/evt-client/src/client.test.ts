@@ -34,6 +34,21 @@ describe('EvtClient', () => {
   });
 
   describe('publish', () => {
+    it('times out if headers arrive but the response body stalls', async () => {
+      mockFetch.mockImplementationOnce(async (_url, options: RequestInit) => ({
+        ok: true,
+        json: () =>
+          new Promise((_, reject) =>
+            options.signal!.addEventListener(
+              'abort',
+              () => reject(new DOMException('aborted', 'AbortError')),
+              { once: true },
+            ),
+          ),
+      }));
+      const short = new EvtClient({ apiKey: 'test', retries: 0, timeout: 20 });
+      await expect(short.publish({ eventType: 'test' })).rejects.toThrow('timeout');
+    });
     it('publishes an event and returns eventId', async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ eventId: 'evt-123' }));
 

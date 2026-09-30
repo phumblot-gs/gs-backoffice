@@ -94,7 +94,11 @@ module "compute" {
 # MONITORING
 # -----------------------------------------------------------------------------
 module "monitoring" {
-  source = "../../modules/monitoring"
+  source               = "../../modules/monitoring"
+  mcp_log_group_name   = module.compute.mcp_log_group_name
+  audit_queue_name     = module.compute.audit_queue_name
+  audit_dlq_name       = module.compute.audit_dlq_name
+  audit_log_group_name = module.compute.audit_log_group_name
 
   environment  = var.environment
   project_name = var.project_name

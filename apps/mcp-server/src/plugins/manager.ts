@@ -1,3 +1,9 @@
+import {
+  auditConfigured,
+  createAuditPublisher,
+  auditedCall,
+  AUDIT_ENQUEUE_FAILURE,
+} from '@gs-backoffice/audit';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ElicitResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import pino from 'pino';
@@ -71,6 +77,49 @@ export class PluginManager {
             return null;
           }
         };
+        if (auditConfigured()) {
+          // Explicit read-only allowlist; new/unknown tools fail closed before execution.
+          const readOnly = new Set([
+            'henri_list_workflows',
+            'henri_list_approvals',
+            'henri_ticket_status',
+            'henri_digest',
+            'henri_budget_status',
+            'henri_search_docs',
+          ]);
+          const event = createBackofficeEvent(
+            AUDIT_TOOL_INVOKED,
+            { userId: context.userId, accountId: this.evtAccountId, role: context.groups[0] },
+            { accountId: this.evtAccountId, resourceType: tool.name, resourceId: context.userId },
+            {
+              tool: tool.name,
+              category: tool.auditCategory ?? 'uncategorized',
+              userEmail: context.userEmail,
+              inputKeys: Object.keys(parsed),
+            },
+            this.environment as 'development' | 'staging' | 'production',
+          );
+          try {
+            return await auditedCall({
+              event,
+              sensitive: !readOnly.has(tool.name),
+              publish: createAuditPublisher(),
+              run: () => tool.execute(parsed as Record<string, unknown>, context, { elicit }),
+              isError: (result) => result.isError === true,
+              log: (audit) => logger.info({ audit }, 'audit_event'),
+              failed: (phase, eventId) =>
+                logger.error({ phase, eventId, tool: tool.name }, AUDIT_ENQUEUE_FAILURE),
+            });
+          } catch (err) {
+            // Keep tool failures inside the MCP response; audit already captured exception outcomes.
+            return {
+              content: [
+                { type: 'text' as const, text: err instanceof Error ? err.message : 'Tool failed' },
+              ],
+              isError: true,
+            };
+          }
+        }
         const result = await tool.execute(parsed as Record<string, unknown>, context, { elicit });
 
         if (tool.auditCategory) {

@@ -1,83 +1,112 @@
-# Audit trail & durability model (SOC 2)
+# Audit trail and durability model
 
-How every action taken through Henri — by an employee **or** by an agent in the
-self-development loop — is recorded, and **which store is authoritative for what**. This is
-the SOC 2 evidence map (CC6 logical access, CC7 monitoring, change management).
+Last updated: 2026-09-30. **The S3 mirror and asynchronous delivery described below
+are PR #119 changes, pending deployment and live verification.** Historical run
+logs already lost with old Fargate tasks cannot be recovered by this change.
 
-Last updated: 2026-06-28, after the self-evolution loop was validated end-to-end and audited.
+## Stores and responsibilities
 
-## 1. Four durable stores (defense in depth)
+| Store                     | Evidence                                                        | Retention / limits                                                                                                                                                                       |
+| ------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S3 `run-logs/`            | Native Paperclip agent execution logs, including bridge stderr  | Current objects have no automatic expiry; old snapshot versions expire after 30 days. Native mirror every 60 seconds and at completion; abrupt termination can lose the unmirrored tail. |
+| S3 `audit/`               | Structured audit envelopes, written before SQS enqueue          | No automatic expiry, including old versions. Versioning is recovery protection, **not immutable storage**.                                                                               |
+| Dedicated SQS audit queue | Pending delivery to EVT                                         | 14 days; single consumer, bounded recovery throughput.                                                                                                                                   |
+| EVT                       | Cross-system audit and business events                          | Delivery of queued events is asynchronous and at least once.                                                                                                                             |
+| CloudWatch                | Employee `audit_event`, delivery signals and operational errors | Retention configured by Terraform; consumer logs retained 30 days.                                                                                                                       |
+| Paperclip PostgreSQL      | Native activity log, approvals, budgets, issue/run state        | Separate native evidence; database backup policy applies.                                                                                                                                |
 
-No single store is the sole source of truth. An action is typically recorded in several,
-so a gap in one (e.g. EVT briefly unavailable) does not lose the trail.
+Detailed execution logs stay in S3. Structured audit facts are delivered to EVT;
+raw log files and raw MCP tool arguments are not copied into the audit queue.
+Agent events carry `runId` / `issueId`; employee events identify the user and tool.
 
-| Store                                             | What it holds                                                                                                                                                                     | Durability                                                                                              |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **EVT bus** (`backoffice.*` events)               | The primary, cross-system event stream (audit + lifecycle + business).                                                                                                            | Append stream, tenant-scoped by API key. **Emission is best-effort** (never throws).                    |
-| **CloudWatch** — MCP `audit_event` log            | **Every employee tool call** (`henri_*`): the `PluginManager` writes `logger.info({audit}, 'audit_event')` for each invocation, **independent of EVT**.                           | Durable; the SOC 2 backstop for the employee surface (CC7).                                             |
-| **Bridge run-log** (`backoffice_audit` on stderr) | **Every agent/bridge tool call + evolution event**: `publishEvent` always writes the event to stderr → captured in the Paperclip run-log, **before** the best-effort EVT publish. | Durable per-run (Paperclip run-log store). Added so the agent surface has parity with the MCP backstop. |
-| **Paperclip `activity_log`** (native)             | `approval.created/approved/rejected`, `budget.*` (threshold crossed / incident resolved), routine runs, issue status transitions.                                                 | Native, durable, independent of our code.                                                               |
+## Delivery and outage behavior
 
-**Implication:** approval decisions and budget changes are recorded in **two or three** places
-(EVT + CloudWatch/run-log + native `activity_log`); the weakest single link (EVT-only) is the
-bridge events, now mitigated by the stderr run-log backstop.
+```text
+Employee MCP / agent bridge
+  -> S3 audit/<eventId>.json
+  -> dedicated SQS queue
+  -> audit-consumer (one request at a time, at most one EVT publish/second)
+  -> EVT
+```
 
-## 2. Event taxonomy (`backoffice.*`)
+The deposit has a shared three-second deadline for S3 and SQS, without application
+retries. A failed deposit attempts an independent CloudWatch metric with at most
+another 500 ms. Operations do not wait for EVT **to record the queued audit**.
+Other business integrations and notification calls retain their own latency.
 
-Envelope (all events, via `createBackofficeEvent`): `eventType`, `timestamp` (action time,
-client-stamped; EVT also records an ingestion time), `source{application,version,environment}`,
-`actor{userId,accountId,role}`, `scope{accountId,resourceType,resourceId}`, `payload`. `eventId`
-is assigned by EVT. Actor = the human's `userId`+`userEmail` for employee tools, or the
-agent's uuid (`role:"agent"`) for bridge events.
+On timeout, network failure, HTTP 401/403/429 or server error, the consumer leaves
+the message pending, changes its visibility and stops receiving during an
+exponential cooldown: approximately 30 seconds, 60 seconds, etc., capped at 15
+minutes with jitter. The consumer also uses an eight-second EVT request timeout,
+including response-body reads. There is no nested EVT client retry. It resumes
+at the same bounded rate after recovery; it does not drain the backlog in a burst.
+Cooldown state is in memory and resets on a consumer restart.
 
-| Event type                | Emitted by                                                                         | Key payload                                                                       | Durable in                                |
-| ------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------- |
-| `audit.tool_invoked`      | MCP server (every `henri_*`) **and** bridge (every sandbox/governance/review tool) | `{tool, category, ok/isError, userEmail \| agentId, runId, issueId, input}`       | EVT + CloudWatch (MCP) / run-log (bridge) |
-| `approval.requested`      | MCP `henri_start_workflow` (sensitive)                                             | `{approvalId, processCode, scope, requestedBy, summary, projectName, approveUrl}` | EVT + native `activity_log`               |
-| `approval.decided`        | MCP `henri_approve` / `henri_review_approval`                                      | `{approvalId, processCode, scope, decision, approver, requestedBy, runTicket}`    | EVT + native `activity_log`               |
-| `evolution.plan_proposed` | MCP (request_evolution approval requested)                                         | `{approvalId, processCode, requestedBy, notes}`                                   | EVT                                       |
-| `evolution.plan_accepted` | MCP (request_evolution approved)                                                   | `{approvalId, processCode, approver, requestedBy, runTicket}`                     | EVT                                       |
-| `evolution.step_created`  | bridge `create_child_issue`                                                        | `{issueId, agentId, childId, childIdentifier, assigneeAgentId, title}`            | EVT + run-log                             |
-| `evolution.pr_opened`     | bridge `open_pr`                                                                   | `{issueId, agentId, number, url, title}`                                          | EVT + run-log                             |
-| `evolution.completed`     | bridge `report_progress` (done)                                                    | `{issueId, agentId, identifier}`                                                  | EVT + run-log                             |
-| `evolution.escalated`     | bridge `report_progress` (blocked/in_review)                                       | `{issueId, agentId, status, identifier}`                                          | EVT + run-log                             |
-| `evolution.merged`        | CI `promote-staging.yml` (evolution PR merged)                                     | `{prNumber, url, branch, mergedBy, sha}`                                          | EVT + GitHub                              |
-| `deploy.completed`        | CI `deploy-staging.yml` (deploy success)                                           | `{environment, sha, ref, runId, actor}`                                           | EVT + GitHub Actions                      |
-| `notify.google_chat`      | bridge (PR review), budget plugin (alerts), digest                                 | `{text, scope}` → routed to a Chat channel by the notify-consumer                 | EVT                                       |
-| `budget.snapshot`         | budget plugin (daily cron)                                                         | per-scope consumption (company/agents/projects), cents, status, paused            | EVT (BI)                                  |
+Invalid envelopes and HTTP 400/413/422 responses go to a separate failed-event
+queue. The original message is deleted only after that transfer succeeds. There
+is deliberately no automatic `maxReceiveCount` redrive: an EVT outage must not
+exhaust delivery attempts for valid events. Both queues retain messages 14 days;
+S3 provides recovery evidence beyond this window, subject to operator replay.
 
-The **notify-consumer subscribes only** to `approval.requested`, `approval.decided`,
-`notify.google_chat` → only those reach Google Chat. `audit.*`, `evolution.*`, `budget.snapshot`,
-`deploy.*` are **audit/BI only** (no Chat noise).
+## Sensitive tool execution
 
-## 3. The change-management chain (self-evolution)
+In staging and production, `AUDIT_QUEUE_REQUIRED=true` enables mandatory durable
+auditing. For mutating or unknown tools:
 
-For a `request_evolution` (the SOC 2 change-management story), the trail is continuous:
+1. Record an **intent** with actor, tool, timestamp and `invocationId`.
+2. Require successful S3 archival **and** SQS enqueue before invoking the tool.
+3. Execute the tool, retaining existing RBAC and human-approval gates.
+4. Record an **outcome** (`success`, `error`, or `exception`) with the same
+   invocation ID and a distinct event ID.
 
-1. **Request** — `audit.tool_invoked{henri_start_workflow}` + `approval.requested` + `evolution.plan_proposed` (who requested, what).
-2. **Decision** — `audit.tool_invoked{henri_review_approval/henri_approve}` (the **approver**, ≠ requester — separation of duties) + `approval.decided` + `evolution.plan_accepted`.
-3. **Implementation** — `evolution.step_created` (each Engineer step) + `audit.tool_invoked` for every sandbox tool + `evolution.pr_opened` (the PR).
-4. **Go-live** — `evolution.merged` (the **human who merged**) + `deploy.completed` (correlate by `sha`).
+An intent is not proof that the action completed. A crash between these steps may
+leave an unmatched intent. An outcome-deposit failure raises an operational
+signal but does not report an already executed action as cancelled. Investigate
+before retrying an action with external side effects.
 
-Who / what / when is captured at each step; the human approver and the human merger are
-recorded by name.
+Explicit read-only tools can run when the audit deposit fails; the failure is
+still signalled. New tools default to the sensitive gate. Local development
+without any audit queue configuration retains the legacy direct-EVT path.
 
-## 4. Retrieving the trail (verification)
+## Coverage and event taxonomy
 
-- **EVT** — `/v1/events/query` is unreliable on the shared stream; use a **durable filtered
-  queue** (consume + ack), created with the **container's** EVT key (events are tenant-scoped
-  by publishing key — see the EVT-tenant note). `scripts/verify-evolution-events.mjs` (ensure →
-  trigger → drain; `peek` for non-destructive listing).
-- **CloudWatch** — log group `/ecs/gs-backoffice-staging/mcp-server`, filter `audit_event`.
-- **Bridge** — the agent's Paperclip run-log (`backoffice_audit` lines).
-- **Paperclip** — `GET /api/companies/:id/approvals`, `…/budgets/overview`, and the native
-  `activity_log`.
+All authorized tool executions registered by the employee `PluginManager`, and
+all tools wrapped by the agent bridge, emit `backoffice.audit.tool_invoked` through
+the new path. Schema/RBAC rejection before invocation is outside this wrapper.
 
-## 5. Known limitations
+The bridge also queues its `backoffice.evolution.*` facts (step created, PR opened,
+completed, escalated). Business notifications (`backoffice.notify.google_chat`)
+stay on the existing direct EVT route. Employee approval/evolution business
+events, budget-plugin events, CI merge/deploy events and other Paperclip native
+operations are **not all migrated to this queue**. Their existing evidence stores
+and delivery behavior still apply. In particular, an EVT outage can still delay
+or lose a best-effort notification even while its tool audit is safely queued.
 
-- **Best-effort EVT emission**: an EVT outage drops the EVT copy (the event is never retried).
-  Mitigated by the CloudWatch (MCP) and run-log (bridge) backstops, and the native `activity_log`
-  for approvals/budget/routines.
-- **Merge/deploy** events come from CI (`source.application = gs-backoffice-ci`); if a deploy is
-  done manually outside the workflow, no `deploy.completed` is emitted.
-- See `multi-tenant-soc2-design.md` for the broader SOC 2 control map.
+Useful correlation fields are `eventId`, `payload.invocationId`, actor, timestamp,
+tool, run/issue IDs, PR number and commit SHA (where the originating event includes
+them). Structured tool audit records contain input **key names**, not values.
+Lifecycle events may contain titles/summaries; access to evidence remains restricted.
+
+## Duplicate delivery and ordering
+
+The same event ID is preserved in S3, SQS retries and recovery. The inspected EVT
+code deduplicates database inserts by `event_id`, but publishes to SNS before the
+insert: **bus subscribers can still receive duplicates** and must deduplicate by
+ID before causing side effects. End-to-end exactly-once delivery is not promised.
+The SQS queue is standard, so consumers must correlate phases by invocation ID
+and action timestamp rather than assuming arrival order.
+
+## Alerts and recovery
+
+Alerts use CloudWatch -> SNS -> the existing Google Chat alert Lambda, independent
+of EVT. They cover failed deposits, open circuit, consumer errors, missing process
+heartbeat, oldest pending event >5 minutes, backlog >=10,000, failed-event queue,
+and oldest pending event >24 hours (well before retention expiry).
+
+A process heartbeat proves liveness, not successful delivery. SQS age/backlog and
+`AUDIT_DELIVERED` / `AUDIT_CIRCUIT_RECOVERED` establish progress.
+
+See [audit delivery operations](../operations/audit-delivery.md) for deployment
+checks, outage handling and selected-event recovery. See
+[multi-tenant SOC 2 design](multi-tenant-soc2-design.md) for the broader control map.
+This implementation does not wire Comp AI or itself establish SOC 2 compliance.
