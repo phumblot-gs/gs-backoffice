@@ -1,0 +1,70 @@
+name: Agents authz changed
+
+# Audit (SOC 2 CC6/CC8): when a change to config/agents-authz.json lands on main, record
+# WHO approved it and WHAT it changed as backoffice.authz.changed on EVT. Correlates with
+# backoffice.deploy.completed by commit SHA (the file ships inside the Paperclip image)
+# and with the next backoffice.authz.drift run. Best-effort, like the other CI events:
+# an EVT hiccup never fails main — the PR and its reviews remain the primary evidence.
+on:
+  push:
+    branches: [main]
+    paths:
+      - config/agents-authz.json
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  emit:
+    name: Emit backoffice.authz.changed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history, so the pre-push revision is readable)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Summarise the change
+        id: summary
+        run: echo "json=$(node scripts/authz-changed-summary.mjs '${{ github.event.before }}' '${{ github.sha }}')" >> "$GITHUB_OUTPUT"
+
+      # The PR that produced this commit and the humans who approved it. Approvals by
+      # bots are kept (they would show up here as evidence of a misconfiguration).
+      - name: Find the PR and its approvers
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.merged_at != null)][0]')
+          if [ -z "$pr" ] || [ "$pr" = "null" ]; then
+            echo "info={\"prNumber\":null,\"url\":null,\"mergedBy\":null,\"author\":null,\"reviewers\":[]}" >> "$GITHUB_OUTPUT"
+            echo "::warning::No merged PR found for $SHA — a direct push to main changed agents-authz.json"
+            exit 0
+          fi
+          number=$(echo "$pr" | jq -r '.number')
+          reviewers=$(gh api "repos/$REPO/pulls/$number/reviews" --paginate \
+            --jq '[.[] | select(.state == "APPROVED") | .user.login] | unique')
+          merged_by=$(gh api "repos/$REPO/pulls/$number" --jq '.merged_by.login')
+          info=$(echo "$pr" | jq -c --argjson reviewers "$reviewers" --arg mergedBy "$merged_by" \
+            '{prNumber: .number, url: .html_url, mergedBy: $mergedBy, author: .user.login, reviewers: $reviewers}')
+          echo "info=$info" >> "$GITHUB_OUTPUT"
+
+      - name: Emit backoffice.authz.changed
+        env:
+          EVT_API_URL: ${{ secrets.EVT_API_URL }}
+          EVT_API_KEY: ${{ secrets.EVT_API_KEY }}
+          EVT_ACCOUNT_ID: ${{ secrets.EVT_ACCOUNT_ID }}
+          EVT_EVENT_TYPE: backoffice.authz.changed
+          EVT_RESOURCE_TYPE: authz
+          EVT_RESOURCE_ID: ${{ github.sha }}
+          EVT_ACTOR: ${{ github.actor }}
+          SUMMARY: ${{ steps.summary.outputs.json }}
+          PR_INFO: ${{ steps.pr.outputs.info }}
+          SHA: ${{ github.sha }}
+        run: |
+          export EVT_PAYLOAD=$(jq -cn --arg sha "$SHA" --argjson s "$SUMMARY" --argjson p "$PR_INFO" \
+            '{sha: $sha, file: "config/agents-authz.json"} + $p + $s')
+          node scripts/emit-evt.mjs
