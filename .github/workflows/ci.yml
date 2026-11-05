@@ -158,3 +158,9 @@ jobs:
 
       - name: Format check
         run: pnpm format:check
+
+      # Agent authorizations as code (docs/architecture/agents-authz.md): schema, policy
+      # rules (no hiring, host never full_auto, external sends ask_first/off, quarterly
+      # review…) and the static "runner API tools off" check. Fail-closed.
+      - name: Agents authz policy
+        run: pnpm exec tsx scripts/check-agents-authz.ts

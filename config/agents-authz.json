@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "company": {
+    "requireBoardApprovalForNewAgents": true
+  },
+  "instance": {
+    "runnerApiToolsEnabled": false,
+    "experimentalFlagsOff": ["enablePublicMcp", "enableGitHubReviewBots", "enableMcpAggregators"]
+  },
+  "profiles": {
+    "business": {
+      "trustPreset": "standard",
+      "runsIn": "host",
+      "approvalMode": "restricted",
+      "description": "Agent harness runs on the Paperclip host (claude_local). Tool use is restricted to an explicit --allowedTools list; no permission bypass. Code execution, when any, happens through the Fly Sprites sandbox TOOLS, not in the harness."
+    }
+  },
+  "agents": {
+    "ceo": {
+      "profile": "business",
+      "canCreateAgents": true,
+      "canCreateSkills": false,
+      "canAssignTasks": true,
+      "grants": [],
+      "connectors": {},
+      "adapter": {
+        "type": "claude_local",
+        "model": "claude-haiku-4-5-20251001"
+      },
+      "hiringException": {
+        "justification": "Top of the org chart: may propose new agents. Every hire it proposes still requires board approval (requireBoardApprovalForNewAgents=true), and the new agent is reported as unknown_agent until a PR declares it.",
+        "approvedBy": ["pierre"],
+        "approvedAt": "2026-11-05"
+      },
+      "owner": "pierre",
+      "justification": "Top of the Paperclip org chart. Approves and delegates evolution requests to the Methods Officer, and may propose new agents (board-approved). Restricted harness: no permission bypass, no skill authoring.",
+      "reviewedAt": "2026-11-05"
+    },
+    "methods-officer": {
+      "profile": "business",
+      "canCreateAgents": false,
+      "canCreateSkills": false,
+      "canAssignTasks": true,
+      "grants": [],
+      "connectors": {},
+      "adapter": {
+        "type": "claude_local",
+        "model": "claude-sonnet-4-6",
+        "allowedTools": [
+          "ToolSearch",
+          "Read",
+          "Grep",
+          "Glob",
+          "TodoWrite",
+          "mcp__gs-sandbox__sandbox_run",
+          "mcp__gs-sandbox__sandbox_code_task",
+          "mcp__gs-sandbox__sandbox_release",
+          "mcp__gs-sandbox__report_progress",
+          "mcp__gs-sandbox__get_diff",
+          "mcp__gs-sandbox__open_pr",
+          "mcp__gs-sandbox__create_child_issue",
+          "mcp__gs-sandbox__get_issue"
+        ],
+        "plainEnvAllowed": ["PAPERCLIP_PROJECT_ID"]
+      },
+      "owner": "pierre",
+      "justification": "Self-evolution loop planner (role cto). Plans changes, delegates coding to the Engineer through child issues, reviews diffs and opens PRs via the sandbox bridge. Humans merge.",
+      "reviewedAt": "2026-11-05"
+    },
+    "engineer": {
+      "profile": "business",
+      "canCreateAgents": false,
+      "canCreateSkills": false,
+      "canAssignTasks": false,
+      "grants": [],
+      "connectors": {},
+      "adapter": {
+        "type": "claude_local",
+        "model": "claude-haiku-4-5-20251001",
+        "allowedTools": [
+          "ToolSearch",
+          "Read",
+          "Grep",
+          "Glob",
+          "TodoWrite",
+          "mcp__gs-sandbox__sandbox_run",
+          "mcp__gs-sandbox__sandbox_code_task",
+          "mcp__gs-sandbox__sandbox_release",
+          "mcp__gs-sandbox__report_progress",
+          "mcp__gs-sandbox__get_diff",
+          "mcp__gs-sandbox__open_pr"
+        ]
+      },
+      "owner": "pierre",
+      "justification": "Self-evolution loop executor. Drives the single-use Fly Sprites sandbox tools (coding and verification run in Firecracker microVMs) and opens the PR; never assigns work.",
+      "reviewedAt": "2026-11-05"
+    }
+  },
+  "environments": {
+    "staging": {
+      "agentIds": {
+        "ceo": "80096853-250b-4fbe-b24c-b5d8438f6a0a",
+        "methods-officer": "e9ef031e-e895-48d2-b642-6c0b1ca96298",
+        "engineer": "cf4d5caf-a68c-48f5-a302-1c4db6e05d2d"
+      },
+      "overrides": {}
+    },
+    "production": {
+      "agentIds": {},
+      "overrides": {}
+    }
+  }
+}

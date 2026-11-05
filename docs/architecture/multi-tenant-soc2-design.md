@@ -83,6 +83,7 @@ This question (employee rights on companies + expert-agent access) is **Layer A*
 ### SOC 2 controls + evidence (CC6 Logical Access / Confidentiality)
 
 - Least privilege, deny-by-default (already fail-closed). Access matrix is **version-controlled** (`rbac.json` in git → reviewable change history).
+- **Agent** authorizations get the same discipline: `config/agents-authz.json` (schema + CI rules, code-owner review, daily read-only drift detection against Paperclip). See [agents-authz.md](agents-authz.md).
 - **Cross-tenant isolation tests** in CI (automated negative tests: user of company A cannot read company B's data) — primary evidence for confidentiality.
 - Quarterly **access review**: export `(user → groups → company access)` for sign-off (feeds Comp AI).
 - Offboarding: removal from a JumpCloud group instantly removes access (verified by the group-resolution fix).
