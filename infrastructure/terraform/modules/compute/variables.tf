@@ -160,3 +160,48 @@ variable "paperclip_resolved_secret_path" {
   EOT
   type        = string
 }
+
+variable "anthropic_auth" {
+  description = <<-EOT
+    How the Paperclip container authenticates to Anthropic.
+      api_key    — the static ANTHROPIC_API_KEY from the app secret (legacy).
+      federation — workload identity federation: no static key; an AWS STS web identity
+                   token for the Paperclip task role, exchanged by Claude Code, plus a
+                   short-lived sandbox token. See docs/architecture/anthropic-federation.md.
+    Switching back to api_key is the rollback.
+  EOT
+  type        = string
+  default     = "api_key"
+
+  validation {
+    condition     = contains(["api_key", "federation"], var.anthropic_auth)
+    error_message = "anthropic_auth must be \"api_key\" or \"federation\"."
+  }
+}
+
+variable "anthropic_federation" {
+  description = <<-EOT
+    Anthropic workload identity federation identifiers (not secrets), from the Claude
+    Console. Required when anthropic_auth = "federation" (agents_*, organization_id);
+    the sandbox_* trio is optional and enables the short-lived sandbox token.
+  EOT
+  type = object({
+    organization_id            = optional(string, "")
+    workspace_id               = optional(string, "")
+    agents_rule_id             = optional(string, "")
+    agents_service_account_id  = optional(string, "")
+    agents_audience            = optional(string, "anthropic-agents")
+    sandbox_rule_id            = optional(string, "")
+    sandbox_service_account_id = optional(string, "")
+    sandbox_audience           = optional(string, "anthropic-sandbox")
+  })
+  default = {}
+
+  validation {
+    condition = trimspace(var.anthropic_federation.sandbox_rule_id) == "" || (
+      trimspace(var.anthropic_federation.sandbox_service_account_id) != "" &&
+      var.anthropic_federation.sandbox_audience != var.anthropic_federation.agents_audience
+    )
+    error_message = "sandbox_rule_id requires sandbox_service_account_id and a sandbox_audience distinct from agents_audience."
+  }
+}

@@ -112,6 +112,20 @@ cat > "$CONFIG_FILE" <<CONF
 }
 CONF
 
+# Keyless Anthropic auth (docs/architecture/anthropic-federation.md). In federation
+# mode, write the first identity token BEFORE Paperclip starts (Claude Code reads the
+# file on its first exchange), then keep it fresh in a supervised background loop.
+# A static ANTHROPIC_API_KEY would shadow federation entirely, so it is refused here.
+if [ "${GS_ANTHROPIC_AUTH:-api_key}" = "federation" ]; then
+  if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
+    echo "BACKOFFICE_JOB_FAILURE anthropic-federation: ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN is set and would shadow federation — unsetting it"
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+  fi
+  REFRESHER=/opt/gs-agent-tools/anthropic-federation/refresher.mjs
+  node "$REFRESHER" --once || echo "BACKOFFICE_JOB_FAILURE anthropic-federation: initial token refresh failed — agents cannot call Claude until it recovers"
+  ( while true; do node "$REFRESHER"; echo "anthropic-federation: refresher exited, restarting in 5s"; sleep 5; done ) &
+fi
+
 # Override DATABASE_URL in the process env so the server sees the SSL version
 export DATABASE_URL="$PAPERCLIP_DATABASE_URL"
 

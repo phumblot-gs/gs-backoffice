@@ -139,9 +139,17 @@ resource "aws_iam_role" "ecs_task" {
   })
 }
 
+# Attached to the shared task role AND the dedicated Paperclip task role (same rights;
+# see anthropic-federation.tf for why Paperclip has its own role).
+moved {
+  from = aws_iam_role_policy.ecs_task_secrets
+  to   = aws_iam_role_policy.ecs_task_secrets["shared"]
+}
+
 resource "aws_iam_role_policy" "ecs_task_secrets" {
-  name = "secrets-access"
-  role = aws_iam_role.ecs_task.id
+  for_each = local.app_task_roles
+  name     = "secrets-access"
+  role     = each.value
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -219,7 +227,9 @@ resource "aws_ecs_task_definition" "paperclip" {
   cpu                      = var.paperclip_cpu
   memory                   = var.paperclip_memory
   execution_role_arn       = aws_iam_role.ecs_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task.arn
+  # Dedicated role: the Anthropic federation rule trusts THIS role ARN only, so MCP and
+  # notify (shared role) can never mint an Anthropic token.
+  task_role_arn = aws_iam_role.paperclip_task.arn
 
   container_definitions = jsonencode([{
     name  = "paperclip"
@@ -228,7 +238,7 @@ resource "aws_ecs_task_definition" "paperclip" {
       containerPort = 3100
       protocol      = "tcp"
     }]
-    environment = [
+    environment = concat([
       { name = "AUDIT_QUEUE_REQUIRED", value = "true" },
       { name = "AUDIT_METRIC_NAMESPACE", value = "GsBackoffice/${var.environment}" },
       { name = "AUDIT_QUEUE_URL", value = aws_sqs_queue.audit.url },
@@ -255,8 +265,8 @@ resource "aws_ecs_task_definition" "paperclip" {
       # the bridge as a fallback — NOT bound to a Paperclip workspace, which would make the
       # host attempt a git clone each run (we keep all code execution in the Fly sandbox).
       { name = "BACKOFFICE_REPO_URL", value = var.backoffice_repo_url },
-    ]
-    secrets = [
+    ], local.anthropic_federation_env)
+    secrets = concat([
       {
         name      = "DATABASE_URL"
         valueFrom = "${var.db_secret_arn}:url::"
@@ -265,10 +275,14 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "BETTER_AUTH_SECRET"
         valueFrom = "${var.app_secrets_arn}:BETTER_AUTH_SECRET::"
       },
+      ], var.anthropic_auth == "api_key" ? [
+      # Static key — only in api_key mode. Under federation it would shadow the
+      # identity token entirely, so it is not injected at all.
       {
         name      = "ANTHROPIC_API_KEY"
         valueFrom = "${var.app_secrets_arn}:ANTHROPIC_API_KEY::"
       },
+      ] : [], [
       {
         name      = "SPRITES_TOKEN"
         valueFrom = "${var.app_secrets_arn}:SPRITES_TOKEN::"
@@ -335,7 +349,7 @@ resource "aws_ecs_task_definition" "paperclip" {
         name      = "PAPERCLIP_COMPANY_ID"
         valueFrom = "${var.app_secrets_arn}:PAPERCLIP_COMPANY_ID::"
       },
-    ]
+    ])
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -346,6 +360,19 @@ resource "aws_ecs_task_definition" "paperclip" {
     }
     essential = true
   }])
+
+  lifecycle {
+    precondition {
+      condition = var.anthropic_auth != "federation" || alltrue([
+        for v in [
+          var.anthropic_federation.organization_id,
+          var.anthropic_federation.agents_rule_id,
+          var.anthropic_federation.agents_service_account_id,
+        ] : trimspace(v) != ""
+      ])
+      error_message = "anthropic_auth = \"federation\" requires anthropic_federation.organization_id, agents_rule_id and agents_service_account_id."
+    }
+  }
 }
 
 # -----------------------------------------------------------------------------

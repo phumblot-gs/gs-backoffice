@@ -89,6 +89,10 @@ export const BACKOFFICE_EVENT_TYPES = {
   'process.updated': 'backoffice.process.updated',
   'process.created': 'backoffice.process.created',
 
+  // Agent authorizations (config/agents-authz.json)
+  'authz.drift': 'backoffice.authz.drift',
+  'authz.changed': 'backoffice.authz.changed',
+
   // Notifications
   'notify.google_chat': 'backoffice.notify.google_chat',
   'notify.email': 'backoffice.notify.email',
