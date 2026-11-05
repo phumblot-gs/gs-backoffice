@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "company": {
+    "requireBoardApprovalForNewAgents": true
+  },
+  "instance": {
+    "runnerApiToolsEnabled": false,
+    "experimentalFlagsOff": ["enablePublicMcp"]
+  },
+  "profiles": {
+    "business": {
+      "trustPreset": "standard",
+      "runsIn": "host",
+      "approvalMode": "restricted"
+    },
+    "sandbox-coder": {
+      "trustPreset": "standard",
+      "runsIn": "sandbox",
+      "approvalMode": "full_auto"
+    },
+    "sandbox-verifier": {
+      "trustPreset": "low_trust_review",
+      "runsIn": "sandbox",
+      "approvalMode": "read_only"
+    }
+  },
+  "agents": {
+    "chief-of-staff": {
+      "profile": "business",
+      "canCreateAgents": false,
+      "canCreateSkills": false,
+      "canAssignTasks": true,
+      "grants": [
+        {
+          "key": "tasks:assign"
+        }
+      ],
+      "connectors": {
+        "gmail.send": {
+          "state": "allowed",
+          "externalSend": true
+        },
+        "gmail.read": {
+          "state": "allowed",
+          "externalSend": false
+        }
+      },
+      "adapter": {
+        "type": "claude_local",
+        "model": "claude-sonnet-4-6",
+        "allowedTools": ["Read", "Grep"]
+      },
+      "owner": "pierre",
+      "justification": "Routes employee requests to the right agent.",
+      "reviewedAt": "2026-11-01"
+    },
+    "verifier": {
+      "profile": "sandbox-verifier",
+      "canCreateAgents": false,
+      "canCreateSkills": false,
+      "canAssignTasks": false,
+      "grants": [],
+      "connectors": {},
+      "trustBoundary": {
+        "mode": "low_trust_review",
+        "rootIssueId": "11111111-1111-4111-8111-111111111111",
+        "allowedToolClasses": ["git.read"]
+      },
+      "adapter": {
+        "type": "claude_local"
+      },
+      "owner": "denis",
+      "justification": "Read-only verification of PRs in a sandbox.",
+      "reviewedAt": "2026-11-01"
+    }
+  },
+  "environments": {
+    "staging": {
+      "agentIds": {
+        "chief-of-staff": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "verifier": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+      },
+      "overrides": {}
+    },
+    "production": {
+      "agentIds": {},
+      "overrides": {}
+    }
+  }
+}
