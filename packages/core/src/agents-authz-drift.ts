@@ -54,6 +54,8 @@ export interface ObservedAgent {
   /** Raw extraArgs are NOT carried; only the known bypass sequences found in them
    *  (each joined with a space, e.g. "--permission-mode bypassPermissions"). */
   bypassFlags: Observed<string[]>;
+  /** NAMES of adapterConfig.env entries holding a plaintext value — never the values. */
+  plaintextEnvNames: Observed<string[]>;
 }
 
 export interface ObservedState {
@@ -403,6 +405,33 @@ function compareAgent(
         push({ agentSlug: s, agentId: id, path: 'adapterConfig.extraArgs', status: 'ok' });
       }
     }
+  }
+
+  // Plaintext env values: only explicitly allow-listed, non-secret names may be plain.
+  if (!obs.plaintextEnvNames.observable) {
+    push({
+      agentSlug: s,
+      agentId: id,
+      path: 'adapterConfig.env',
+      status: 'unverifiable',
+      reason: obs.plaintextEnvNames.reason,
+    });
+  } else {
+    const allowed = new Set(exp.adapter.plainEnvAllowed ?? []);
+    const offending = obs.plaintextEnvNames.value.filter((n) => !allowed.has(n)).sort();
+    for (const name of offending) {
+      push({
+        agentSlug: s,
+        agentId: id,
+        path: `adapterConfig.env.${name}`,
+        status: 'drift',
+        expected: 'secret reference',
+        actual: 'plaintext value',
+        reason: 'plaintext env value (stored in the database and returned by GET /api/agents)',
+      });
+    }
+    if (offending.length === 0)
+      push({ agentSlug: s, agentId: id, path: 'adapterConfig.env', status: 'ok' });
   }
 
   if (exp.adapter.allowedTools !== undefined) {

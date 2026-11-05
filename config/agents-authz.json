@@ -60,7 +60,8 @@
           "mcp__gs-sandbox__open_pr",
           "mcp__gs-sandbox__create_child_issue",
           "mcp__gs-sandbox__get_issue"
-        ]
+        ],
+        "plainEnvAllowed": ["PAPERCLIP_PROJECT_ID"]
       },
       "owner": "pierre",
       "justification": "Self-evolution loop planner (role cto). Plans changes, delegates coding to the Engineer through child issues, reviews diffs and opens PRs via the sandbox bridge. Humans merge.",

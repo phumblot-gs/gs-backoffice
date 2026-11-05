@@ -169,6 +169,14 @@ describe('CI rules', () => {
     expect(validateAgentsAuthzRules(cfg, TODAY).errors.map((e) => e.rule)).toContain('known-agent');
   });
 
+  it('refuses to allow a credential-like env name in plaintext', () => {
+    const cfg = load('valid.json');
+    cfg.agents['chief-of-staff'].adapter.plainEnvAllowed = ['ANTHROPIC_API_KEY'];
+    expect(validateAgentsAuthzRules(cfg, TODAY).errors.map((e) => e.rule)).toContain(
+      'no-plaintext-secret-env',
+    );
+  });
+
   it('rejects enabling the runner API tools', () => {
     const cfg = load('valid.json');
     cfg.instance.runnerApiToolsEnabled = true;
@@ -262,6 +270,7 @@ function matchingState(): ObservedState {
     approvalFields: observed({ dangerouslySkipPermissions: false }),
     allowedTools: observed(['Grep', 'Read']),
     bypassFlags: observed([]),
+    plaintextEnvNames: observed([]),
   };
   const verifier: ObservedAgent = {
     ...cos,
@@ -359,6 +368,28 @@ describe('drift comparison', () => {
     const p = problems(s).map((f) => f.reason);
     expect(p).toContain('extra grant');
     expect(p).toContain('missing grant');
+  });
+
+  it('detects a plaintext env value, reporting only the variable name', () => {
+    const s = matchingState();
+    s.agents[0].plaintextEnvNames = observed(['ANTHROPIC_API_KEY']);
+    expect(problems(s)).toEqual([
+      expect.objectContaining({
+        agentSlug: 'chief-of-staff',
+        path: 'adapterConfig.env.ANTHROPIC_API_KEY',
+        status: 'drift',
+        expected: 'secret reference',
+        actual: 'plaintext value',
+      }),
+    ]);
+  });
+
+  it('accepts a plaintext env name explicitly allowed for the agent', () => {
+    const cfg = load('valid.json');
+    cfg.agents['chief-of-staff'].adapter.plainEnvAllowed = ['PAPERCLIP_PROJECT_ID'];
+    const s = matchingState();
+    s.agents[0].plaintextEnvNames = observed(['PAPERCLIP_PROJECT_ID']);
+    expect(compareAuthz(cfg, s).filter((f) => f.status !== 'ok')).toEqual([]);
   });
 
   it('flags an unknown agent and a missing one', () => {

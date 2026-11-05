@@ -130,6 +130,13 @@ export const AdapterSchema = z
     model: z.string().min(1).optional(),
     /** claude_local: the exact `--allowedTools` list passed in `extraArgs`. */
     allowedTools: z.array(z.string().min(1)).optional(),
+    /**
+     * adapterConfig.env names allowed to hold a PLAINTEXT value (non-secret identifiers
+     * such as PAPERCLIP_PROJECT_ID). Every other env entry must be a secret reference
+     * (`secret_ref` / `user_secret_ref`): a plaintext value is stored in the database,
+     * its backups, and returned unmasked by GET /api/agents.
+     */
+    plainEnvAllowed: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, 'env var name')).optional(),
   })
   .strict();
 export type Adapter = z.infer<typeof AdapterSchema>;

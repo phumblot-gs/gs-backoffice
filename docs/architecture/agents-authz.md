@@ -36,7 +36,7 @@ instance           runnerApiToolsEnabled (must be false), experimentalFlagsOff[]
 profiles           name → { trustPreset, runsIn, approvalMode }
 agents             slug → { profile, canCreateAgents, canCreateSkills, canAssignTasks,
                             grants[{key, scope?}], connectors{action → {state, externalSend}},
-                            adapter{type, model?, allowedTools?}, trustBoundary?,
+                            adapter{type, model?, allowedTools?, plainEnvAllowed?}, trustBoundary?,
                             hiringException?{justification, approvedBy[], approvedAt},
                             owner, justification, reviewedAt }
 environments       staging | production → { companyId?, agentIds{slug → uuid}, overrides{slug → partial agent} }
@@ -68,6 +68,7 @@ environments       staging | production → { companyId?, agentIds{slug → uuid
   and documents no selector syntax (`scope.allow` appears nowhere). It is stored verbatim
   and compared structurally. Do not invent selectors.
 - **Secrets never belong here.** CI rejects credential-looking strings in the file.
+- **Agent env.** Every `adapterConfig.env` entry must be a secret reference (`secret_ref` / `user_secret_ref`). A plaintext value is stored in the database and its backups, and `GET /api/agents` returns it unmasked. Non-secret identifiers may stay plaintext only if they are listed in `adapter.plainEnvAllowed`; today that is the Methods Officer's `PAPERCLIP_PROJECT_ID`.
 
 ## CI rules (hard failures)
 
@@ -86,6 +87,7 @@ a forbidden setting past review. Each rule has a negative fixture in
 | `unique-agent-id`          | one Paperclip id mapped to two slugs in an environment                                                                                                                                  | `duplicate-agent-id`                                                                        |
 | `review-date`              | `reviewedAt` older than **120 days** (warning from 100), or in the future                                                                                                               | `stale-review`                                                                              |
 | `runner-api-tools-off`     | `instance.runnerApiToolsEnabled=true`, or any Terraform file sets `PAPERCLIP_RUNNER_API_TOOLS_ENABLED=true`                                                                             | test                                                                                        |
+| `no-plaintext-secret-env`  | a credential-like name (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE`…) is listed in `adapter.plainEnvAllowed`                                                                        | test                                                                                        |
 | schema                     | missing `owner` / `justification` / `reviewedAt`, unknown permission key, unknown field                                                                                                 | `missing-owner`, `unknown-permission-key`                                                   |
 
 The 120-day limit fails **every** CI run once any agent is overdue. That is deliberate: it
@@ -103,14 +105,14 @@ apply: the EVT key comes from a secret reference in the plugin config.
 For every company whose plugin config names an `environment`, it loads the baked
 `/opt/gs-agent-tools/agents-authz.json` (fail-closed) and compares:
 
-| Observed by the plugin (2026.824.1)                                                                  | Reported as `unverifiable`, never `ok`                                                              |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| company `requireBoardApprovalForNewAgents`                                                           | connector action states: no plugin capability exposes tool connections                              |
-| agents present / missing / unknown (terminated agents are ignored)                                   | `runsIn`: environment drivers are not readable by plugins                                           |
-| `permissions.canCreateAgents`, `canCreateSkills`, `trustPreset`, `authorizationPolicy.trustBoundary` | `canAssignTasks`, unless an explicit `tasks:assign` grant or the `ceo` role makes it observable     |
-| explicit grants (`authorization.grants.list`, principal type `agent`)                                | `PAPERCLIP_RUNNER_API_TOOLS_ENABLED`: the worker env is curated (enforced statically in CI instead) |
-| `adapterType`, `model`, `dangerouslySkipPermissions`, `--allowedTools`, bypass flags in `extraArgs`  | instance experimental flags: instance settings are not readable by plugins                          |
-| approval mode of an adapter without a verified mapping                                               |                                                                                                     |
+| Observed by the plugin (2026.824.1)                                                                                                                                    | Reported as `unverifiable`, never `ok`                                                              |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| company `requireBoardApprovalForNewAgents`                                                                                                                             | connector action states: no plugin capability exposes tool connections                              |
+| agents present / missing / unknown (terminated agents are ignored)                                                                                                     | `runsIn`: environment drivers are not readable by plugins                                           |
+| `permissions.canCreateAgents`, `canCreateSkills`, `trustPreset`, `authorizationPolicy.trustBoundary`                                                                   | `canAssignTasks`, unless an explicit `tasks:assign` grant or the `ceo` role makes it observable     |
+| explicit grants (`authorization.grants.list`, principal type `agent`)                                                                                                  | `PAPERCLIP_RUNNER_API_TOOLS_ENABLED`: the worker env is curated (enforced statically in CI instead) |
+| `adapterType`, `model`, `dangerouslySkipPermissions`, `--allowedTools`, bypass flags in `extraArgs`, **names** of plaintext `adapterConfig.env` entries (never values) | instance experimental flags: instance settings are not readable by plugins                          |
+| approval mode of an adapter without a verified mapping                                                                                                                 |                                                                                                     |
 
 **Outputs.** One `backoffice.authz.drift` event per non-`ok` finding, with payload
 `environment, status, agentSlug, agentId, path, expected, actual, reason, trigger`. Statuses:
@@ -216,8 +218,14 @@ created.
 
 Production has not been touched: apply the same two changes there, then fill in its agent ids.
 
-Out of scope but found: the CEO agent's `adapterConfig.env` stores `ANTHROPIC_API_KEY` in
-**plaintext**, returned unmasked by `GET /api/agents` (already known; SOC 2 finding).
+**CEO plaintext key — removed on staging on 2026-11-05.** The CEO agent's `adapterConfig.env`
+held its own `ANTHROPIC_API_KEY` in plaintext, returned unmasked by `GET /api/agents`. It was
+removed through ECS Exec with `replaceAdapterConfig` and read back: env is now empty and no
+other field changed. The CEO now uses the container key, like the other agents. That key was
+**different** from the container key, and none of the 3 config revisions holds it. It remains
+in RDS backups, so **revoke it** in the Anthropic console: it is the key last used around
+2026-06-21 (the CEO's last run). Nothing else uses it. Production has not been checked. The
+drift job now reports any plaintext env value by name.
 
 ## Where the docs and the real API disagree (2026.824.1)
 

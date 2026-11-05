@@ -129,7 +129,23 @@ export function observeAgent(
     bypassFlags: adapterConfig
       ? observed(bypassFlagsIn(extraArgs))
       : unobservable('adapterConfig not present on the agent record'),
+    plaintextEnvNames: adapterConfig
+      ? observed(plaintextEnvNames(adapterConfig.env))
+      : unobservable('adapterConfig not present on the agent record'),
   };
+}
+
+/**
+ * Names of env entries bound to a plaintext value (a bare string or `{type:'plain'}`),
+ * per Paperclip's EnvBinding. Secret references are fine. Values never leave here.
+ */
+export function plaintextEnvNames(env: unknown): string[] {
+  const rec = asRecord(env);
+  if (!rec) return [];
+  return Object.entries(rec)
+    .filter(([, b]) => typeof b === 'string' || asRecord(b)?.type === 'plain')
+    .map(([name]) => name)
+    .sort();
 }
 
 async function listAllAgents(

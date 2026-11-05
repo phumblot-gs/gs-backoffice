@@ -102,6 +102,7 @@ export {
   REVIEW_WARN_DAYS,
   REVIEW_FAIL_DAYS,
   EXTERNAL_SEND_ACTION_RE,
+  SECRET_ENV_NAME_RE,
   validateAgentsAuthzRules,
   type AuthzRuleViolation,
   type AuthzRuleReport,

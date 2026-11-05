@@ -24,7 +24,14 @@ const ENG_TOOLS =
 type Rec = Record<string, unknown>;
 
 function compliantWorld() {
-  const agent = (id: string, name: string, role: string, model: string, tools?: string): Rec => ({
+  const agent = (
+    id: string,
+    name: string,
+    role: string,
+    model: string,
+    tools?: string,
+    env: Rec = {},
+  ): Rec => ({
     id,
     companyId: COMPANY,
     name,
@@ -32,8 +39,7 @@ function compliantWorld() {
     status: 'idle',
     adapterType: 'claude_local',
     adapterConfig: {
-      // A credential in adapterConfig.env, exactly like the real CEO agent: must never leak.
-      env: { ANTHROPIC_API_KEY: PLANTED_SECRET },
+      env,
       model,
       ...(tools
         ? {
@@ -55,7 +61,10 @@ function compliantWorld() {
       ...agent(CEO, 'CEO', 'ceo', 'claude-haiku-4-5-20251001'),
       permissions: { canCreateAgents: true, canCreateSkills: false },
     },
-    agent(MO, 'Methods Officer', 'cto', 'claude-sonnet-4-6', MO_TOOLS),
+    // A non-secret identifier in plaintext, explicitly allowed in the file.
+    agent(MO, 'Methods Officer', 'cto', 'claude-sonnet-4-6', MO_TOOLS, {
+      PAPERCLIP_PROJECT_ID: '12121212-1212-4212-8212-121212121212',
+    }),
     agent(ENG, 'Engineer', 'engineer', 'claude-haiku-4-5-20251001', ENG_TOOLS),
   ];
   const grants: Record<string, Array<{ permissionKey: string; scope: Rec | null }>> = {
@@ -220,10 +229,29 @@ describe('authz drift job (mocked Paperclip)', () => {
     ]);
   });
 
+  it('detects a plaintext credential in adapterConfig.env (the staging CEO until 2026-11-05) by name only', async () => {
+    const w = compliantWorld();
+    (w.agents[0].adapterConfig as Rec).env = { ANTHROPIC_API_KEY: PLANTED_SECRET };
+    (w.agents[2].adapterConfig as Rec).env = {
+      GITHUB_TOKEN: { type: 'plain', value: PLANTED_SECRET },
+      OK: { type: 'secret_ref', secretId: 'x' },
+    };
+    const h = harness(w);
+    await runDriftCheck(h.deps);
+    expect(
+      actionable(h.published).map((e) => [e.payload.agentSlug, e.payload.path, e.payload.actual]),
+    ).toEqual([
+      ['ceo', 'adapterConfig.env.ANTHROPIC_API_KEY', 'plaintext value'],
+      ['engineer', 'adapterConfig.env.GITHUB_TOKEN', 'plaintext value'],
+    ]);
+    expect(JSON.stringify(h.published) + JSON.stringify(h.logs)).not.toContain('PLANTED-SECRET');
+  });
+
   it('never publishes or logs a secret value, even with a planted credential everywhere', async () => {
     const w = compliantWorld();
     (w.agents[2].permissions as Rec).canCreateAgents = true;
     (w.agents[0].adapterConfig as Rec).model = PLANTED_SECRET; // drifted field carrying a secret
+    (w.agents[0].adapterConfig as Rec).env = { ANTHROPIC_API_KEY: PLANTED_SECRET };
     (w.agents[1].adapterConfig as Rec).extraArgs = [
       '--api-key',
       PLANTED_SECRET,

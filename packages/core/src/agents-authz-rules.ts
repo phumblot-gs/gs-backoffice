@@ -41,6 +41,10 @@ const HIRING_KEYS = new Set(['agents:create']);
 export const EXTERNAL_SEND_ACTION_RE =
   /(^|[._-])(send|reply|forward|post|publish|share|invite|email|message|notify|upload|create_draft_and_send)($|[._-])/i;
 
+/** Env var names that denote a credential: never allowed as a plaintext agent env value. */
+export const SECRET_ENV_NAME_RE =
+  /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE|CREDENTIAL|AUTH|COOKIE|SESSION)/;
+
 const ENVIRONMENTS: EnvironmentName[] = ['staging', 'production'];
 
 function daysBetween(fromIso: string, today: Date): number {
@@ -93,6 +97,16 @@ function checkAgent(
       rule: 'low-trust-boundary',
       message: 'trustBoundary is only meaningful with trustPreset low_trust_review',
     });
+  }
+
+  for (const name of agent.adapter.plainEnvAllowed ?? []) {
+    if (SECRET_ENV_NAME_RE.test(name)) {
+      push({
+        ...base,
+        rule: 'no-plaintext-secret-env',
+        message: `env "${name}" looks like a credential and cannot be allowed in plaintext — use a secret reference`,
+      });
+    }
   }
 
   for (const [action, c] of Object.entries(agent.connectors)) {
