@@ -145,10 +145,9 @@ export class EvtClient {
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt <= this.retries; attempt++) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
         const response = await fetch(url, {
           ...options,
           headers: {
@@ -158,8 +157,6 @@ export class EvtClient {
           },
           signal: controller.signal,
         });
-
-        clearTimeout(timeoutId);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -186,6 +183,9 @@ export class EvtClient {
         }
 
         throw error;
+      } finally {
+        // Headers alone are not a complete response: bound body reads as well.
+        clearTimeout(timeoutId);
       }
     }
 
