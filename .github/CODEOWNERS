@@ -1,0 +1,20 @@
+# Agent authorizations as code — see docs/architecture/agents-authz.md.
+#
+# Any change to who/what an agent may do needs approval from a code owner who is NOT
+# the author (branch protection: 1 approval, code-owner review required, last push
+# approved by someone else, no bypass). Agents and bots are never code owners, so an
+# agent-authored PR can never be approved by an agent.
+#
+# The rules and the drift job are owned too: weakening a rule must be as visible as
+# weakening the file.
+#
+# TODO(before merge): add Denis's GitHub login to every line below, e.g.
+#   /config/agents-authz.json  @phumblot-gs @<denis-login>
+# Until then a PR authored by Pierre cannot be approved by a code owner.
+/config/agents-authz.json                    @phumblot-gs
+/packages/core/src/agents-authz*.ts          @phumblot-gs
+/packages/core/src/__fixtures__/agents-authz/ @phumblot-gs
+/packages/authz-drift-plugin/                @phumblot-gs
+/scripts/check-agents-authz.ts               @phumblot-gs
+/.github/workflows/agents-authz-changed.yml  @phumblot-gs
+/.github/CODEOWNERS                          @phumblot-gs
