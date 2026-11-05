@@ -25,6 +25,7 @@ RUN pnpm install --frozen-lockfile \
           --filter @gs-backoffice/github-app build \
   && pnpm --filter @gs-backoffice/sandbox-fly-sprites \
           --filter @gs-backoffice/budget-plugin \
+          --filter @gs-backoffice/authz-drift-plugin \
           --filter @gs-backoffice/agent-sandbox-mcp build
 # Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
 RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
@@ -41,6 +42,14 @@ RUN mkdir -p /opt/gs-plugins/plugin-budget \
   && node -e "const p=require('/repo/packages/budget-plugin/package.json'); require('fs').writeFileSync('/opt/gs-plugins/plugin-budget/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,paperclipPlugin:p.paperclipPlugin,dependencies:p.dependencies}, null, 2))" \
   && cd /opt/gs-plugins/plugin-budget \
   && npm install --omit=dev --no-package-lock
+# Standalone bundle for the agent-authz drift detector (read-only capabilities only;
+# no agent.tools.register, so the env passthrough does not apply — EVT key via a secret
+# reference in the plugin config). One-time `plugin install /opt/gs-plugins/plugin-authz-drift`.
+RUN mkdir -p /opt/gs-plugins/plugin-authz-drift \
+  && cp -r packages/authz-drift-plugin/dist /opt/gs-plugins/plugin-authz-drift/dist \
+  && node -e "const p=require('/repo/packages/authz-drift-plugin/package.json'); require('fs').writeFileSync('/opt/gs-plugins/plugin-authz-drift/package.json', JSON.stringify({name:p.name,version:p.version,type:p.type,private:true,paperclipPlugin:p.paperclipPlugin,dependencies:p.dependencies}, null, 2))" \
+  && cd /opt/gs-plugins/plugin-authz-drift \
+  && npm install --omit=dev --no-package-lock
 # Standalone bundle for the agent-facing sandbox MCP server (stdio). NOT a Paperclip
 # plugin — the agent's `claude` process launches it via --mcp-config; it proxies tool
 # calls to the deployed sandbox plugin's executeTool route. Vendor it + its prod deps.
@@ -56,6 +65,9 @@ RUN printf '%s\n' '{"mcpServers":{"gs-sandbox":{"command":"node","args":["/opt/g
 # Bake the RBAC config so the bridge can resolve the per-repo notify scope
 # (repos → scope) for PR-review Google Chat notifications. Synced with RBAC at deploy.
 COPY config/rbac.json /opt/gs-agent-tools/rbac.json
+# Bake the agent authorizations (source of truth for the drift job). Read fail-closed:
+# a missing or invalid file makes the job alert, never pass.
+COPY config/agents-authz.json /opt/gs-agent-tools/agents-authz.json
 
 FROM base AS production
 WORKDIR /app
