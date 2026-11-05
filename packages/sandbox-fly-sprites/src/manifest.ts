@@ -95,6 +95,12 @@ const manifest: PaperclipPluginManifestV1 = {
         format: 'secret-ref',
         description: 'Anthropic API key as a secret reference. Preferred over anthropicKeyEnv.',
       },
+      anthropicSandboxTokenFile: {
+        type: 'string',
+        description:
+          'Workload identity federation: JSON file holding the short-lived sandbox access token, kept fresh by the anthropic-federation refresher. When it exists it is the only Anthropic credential the sandbox gets (default /run/anthropic/sandbox-token).',
+        default: '/run/anthropic/sandbox-token',
+      },
       evtApiKey: {
         format: 'secret-ref',
         description:

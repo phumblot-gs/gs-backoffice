@@ -2,6 +2,11 @@ import type { PluginContext, ToolResult, ScopeKey } from '@paperclipai/plugin-sd
 import type { SpritesClient, Sprite } from '@fly/sprites';
 import { flyClient } from './exec.js';
 import { sandboxRun, sandboxCodeTask } from './sandbox.js';
+import {
+  DEFAULT_SANDBOX_TOKEN_FILE,
+  readSandboxToken,
+  type AnthropicCredential,
+} from './anthropic-credential.js';
 import { runPrReviewDigest, emitChatNotify, evtCredentialsFromEnv } from './digest.js';
 import { resolveGitHubToken } from '@gs-backoffice/github-app';
 
@@ -510,14 +515,31 @@ export function registerSandboxTools(ctx: PluginContext): void {
           error:
             'Push-capable GitHub credential unavailable: no GitHub App in the worker env (GITHUB_APP_ID / GITHUB_APP_INSTALLATION_ID / GITHUB_APP_PRIVATE_KEY) and no SANDBOX_GITHUB_PUSH_TOKEN / SANDBOX_GITHUB_TOKEN — required to push.',
         };
-      const anthropicKey = await resolveSecret(
-        ctx,
-        cfg,
-        'anthropicKey',
-        'anthropicKeyEnv',
-        'ANTHROPIC_API_KEY',
-      );
-      if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
+      // Workload identity federation first: when the refresher's token file exists, the
+      // sandbox gets a short-lived token or nothing — never the long-lived key.
+      const tokenFile =
+        (typeof cfg.anthropicSandboxTokenFile === 'string' &&
+          cfg.anthropicSandboxTokenFile.trim()) ||
+        DEFAULT_SANDBOX_TOKEN_FILE;
+      const federated = readSandboxToken(tokenFile);
+      let anthropicCredential: AnthropicCredential;
+      if (federated.mode === 'federation') {
+        if (!federated.credential) {
+          ctx.logger.error(`${JOB_FAILURE_MARKER} sandbox_code_task: ${federated.error}`);
+          return { error: `Anthropic credential unavailable: ${federated.error}` };
+        }
+        anthropicCredential = federated.credential;
+      } else {
+        const anthropicKey = await resolveSecret(
+          ctx,
+          cfg,
+          'anthropicKey',
+          'anthropicKeyEnv',
+          'ANTHROPIC_API_KEY',
+        );
+        if (!anthropicKey) return { error: 'ANTHROPIC_API_KEY unavailable in the worker env.' };
+        anthropicCredential = { kind: 'api_key', value: anthropicKey };
+      }
 
       const client = flyClient(spritesToken);
       const name = spriteNameForKey(input.sandboxKey);
@@ -530,7 +552,7 @@ export function registerSandboxTools(ctx: PluginContext): void {
           targetBranch: input.targetBranch,
           task: input.task,
           githubToken,
-          anthropicKey,
+          anthropicCredential,
           model: input.model,
           timeoutMs: input.timeoutMs ?? cfgTimeout,
         });

@@ -1,0 +1,26 @@
+{
+  "name": "@gs-backoffice/anthropic-federation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keyless Anthropic auth for the Paperclip container: keeps an AWS STS web identity token on disk for Claude Code's workload identity federation, and a short-lived access token for the sandbox.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/refresher.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sts": "^3.1163.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}

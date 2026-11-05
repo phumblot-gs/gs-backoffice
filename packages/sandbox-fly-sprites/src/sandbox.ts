@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Sprite } from '@fly/sprites';
 import { execReliable, type ExecOutcome } from './exec.js';
 import { shellQuote } from './shell.js';
+import { claudeEnvFor, type AnthropicCredential } from './anthropic-credential.js';
 
 /** Default working directory for the cloned repo inside the Sprite (user `sprite`). */
 export const SANDBOX_WORK_DIR = '/home/sprite/work';
@@ -186,8 +187,9 @@ export interface SandboxCodeTaskInput {
   task: string;
   /** Push-capable GitHub token. */
   githubToken?: string;
-  /** Anthropic API key for the in-sandbox Claude run. */
-  anthropicKey?: string;
+  /** Anthropic credential for the in-sandbox Claude run (short-lived token under
+   *  workload identity federation, the legacy API key otherwise). */
+  anthropicCredential?: AnthropicCredential;
   model?: string;
   timeoutMs?: number;
   workDir?: string;
@@ -262,7 +264,7 @@ export async function sandboxCodeTask(
   const claude = await execReliable(sprite, {
     command: 'sh',
     args: ['-c', claudeCmd],
-    env: input.anthropicKey ? { ANTHROPIC_API_KEY: input.anthropicKey } : undefined,
+    env: claudeEnvFor(input.anthropicCredential),
     timeoutMs: input.timeoutMs,
     id: randomUUID(),
   });

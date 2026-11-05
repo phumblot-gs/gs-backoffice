@@ -70,9 +70,15 @@ resource "aws_s3_bucket_policy" "paperclip_run_logs" {
 
 # This stack currently shares the ECS task role between its three services.
 # Limit access to the run-log prefix; no delete, ACL or public access permission.
+moved {
+  from = aws_iam_role_policy.paperclip_run_logs
+  to   = aws_iam_role_policy.paperclip_run_logs["shared"]
+}
+
 resource "aws_iam_role_policy" "paperclip_run_logs" {
-  name = "${var.project_name}-${var.environment}-paperclip-run-logs"
-  role = aws_iam_role.ecs_task.id
+  for_each = local.app_task_roles
+  name     = "${var.project_name}-${var.environment}-paperclip-run-logs"
+  role     = each.value
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [

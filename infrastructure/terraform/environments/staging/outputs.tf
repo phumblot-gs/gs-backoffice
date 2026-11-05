@@ -30,3 +30,8 @@ output "domains" {
     mcp       = var.mcp_domain
   }
 }
+
+output "paperclip_task_role_arn" {
+  description = "Paperclip task role ARN — the exact sub the Anthropic federation rules must match"
+  value       = module.compute.paperclip_task_role_arn
+}

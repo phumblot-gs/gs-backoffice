@@ -20,9 +20,14 @@ resource "aws_sqs_queue_policy" "audit_tls" {
     Condition = { Bool = { "aws:SecureTransport" = "false" } }
   }] })
 }
+moved {
+  from = aws_iam_role_policy.audit_producer
+  to   = aws_iam_role_policy.audit_producer["shared"]
+}
 resource "aws_iam_role_policy" "audit_producer" {
-  name = "${var.project_name}-${var.environment}-audit-producer"
-  role = aws_iam_role.ecs_task.id
+  for_each = local.app_task_roles
+  name     = "${var.project_name}-${var.environment}-audit-producer"
+  role     = each.value
   policy = jsonencode({ Version = "2012-10-17", Statement = [
     { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = aws_sqs_queue.audit.arn },
     { Effect = "Allow", Action = ["cloudwatch:PutMetricData"], Resource = "*", Condition = { StringEquals = { "cloudwatch:namespace" = "GsBackoffice/${var.environment}" } } },
