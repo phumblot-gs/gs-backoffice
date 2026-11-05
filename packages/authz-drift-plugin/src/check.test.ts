@@ -50,7 +50,11 @@ function compliantWorld() {
     permissions: { canCreateAgents: false, canCreateSkills: false },
   });
   const agents: Rec[] = [
-    agent(CEO, 'CEO', 'ceo', 'claude-haiku-4-5-20251001'),
+    // The CEO holds a hiringException in the file, so canCreateAgents=true is compliant.
+    {
+      ...agent(CEO, 'CEO', 'ceo', 'claude-haiku-4-5-20251001'),
+      permissions: { canCreateAgents: true, canCreateSkills: false },
+    },
     agent(MO, 'Methods Officer', 'cto', 'claude-sonnet-4-6', MO_TOOLS),
     agent(ENG, 'Engineer', 'engineer', 'claude-haiku-4-5-20251001', ENG_TOOLS),
   ];
@@ -126,9 +130,9 @@ describe('authz drift job (mocked Paperclip)', () => {
     expect(paths).not.toContain('ceo:access.canAssignTasks');
   });
 
-  it('detects canCreateAgents switched on (the real staging CEO today)', async () => {
+  it('detects canCreateAgents switched on for an agent without a hiring exception', async () => {
     const w = compliantWorld();
-    (w.agents[0].permissions as Rec).canCreateAgents = true;
+    (w.agents[2].permissions as Rec).canCreateAgents = true;
     const h = harness(w);
     const res = await runDriftCheck(h.deps);
     expect(res.ok).toBe(false);
@@ -136,7 +140,7 @@ describe('authz drift job (mocked Paperclip)', () => {
       expect.objectContaining({
         payload: expect.objectContaining({
           environment: 'staging',
-          agentSlug: 'ceo',
+          agentSlug: 'engineer',
           path: 'permissions.canCreateAgents',
           expected: false,
           actual: true,
@@ -147,7 +151,7 @@ describe('authz drift job (mocked Paperclip)', () => {
     const chat = chatEvents(h.published);
     expect(chat).toHaveLength(1);
     expect(chat[0].payload.scope).toBe('leadership');
-    expect(String(chat[0].payload.text)).toContain('ceo — permissions.canCreateAgents');
+    expect(String(chat[0].payload.text)).toContain('engineer — permissions.canCreateAgents');
     expect(h.logs.some((l) => l.level === 'error' && l.msg.startsWith(JOB_FAILURE_MARKER))).toBe(
       true,
     );
@@ -218,7 +222,7 @@ describe('authz drift job (mocked Paperclip)', () => {
 
   it('never publishes or logs a secret value, even with a planted credential everywhere', async () => {
     const w = compliantWorld();
-    (w.agents[0].permissions as Rec).canCreateAgents = true;
+    (w.agents[2].permissions as Rec).canCreateAgents = true;
     (w.agents[0].adapterConfig as Rec).model = PLANTED_SECRET; // drifted field carrying a secret
     (w.agents[1].adapterConfig as Rec).extraArgs = [
       '--api-key',
@@ -274,7 +278,7 @@ describe('authz drift job (mocked Paperclip)', () => {
 
   it('still runs and logs when EVT is not configured, and says so', async () => {
     const w = compliantWorld();
-    (w.agents[0].permissions as Rec).canCreateAgents = true;
+    (w.agents[2].permissions as Rec).canCreateAgents = true;
     const h = harness(w, { evt: undefined });
     const res = await runDriftCheck(h.deps);
     expect(res.ok).toBe(false);

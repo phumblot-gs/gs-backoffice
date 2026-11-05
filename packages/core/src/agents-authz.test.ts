@@ -121,6 +121,26 @@ describe('CI rules', () => {
     expect(errors.map((e) => e.rule)).toContain(rule);
   });
 
+  it('allows canCreateAgents with an explicit hiringException', () => {
+    expect(rulesOf('hiring-exception.json').errors).toEqual([]);
+  });
+
+  it('a hiringException requires board approval of hires', () => {
+    expect(rulesOf('hiring-exception-without-board-approval.json').errors).toContainEqual(
+      expect.objectContaining({ rule: 'no-hiring', agent: 'chief-of-staff' }),
+    );
+  });
+
+  it('a hiringException cannot be added through an environment override', () => {
+    expect(() => load('hiring-exception-in-override.json')).toThrow(/hiringException|Unrecognized/);
+  });
+
+  it('an agents:create grant stays forbidden even with a hiringException', () => {
+    const cfg = load('hiring-exception.json');
+    cfg.agents['chief-of-staff'].grants.push({ key: 'agents:create' });
+    expect(validateAgentsAuthzRules(cfg, TODAY).errors.map((e) => e.rule)).toContain('no-hiring');
+  });
+
   it('a production-only override that enables hiring is caught in production', () => {
     const { errors } = rulesOf('override-sneaks-hiring.json');
     expect(errors).toContainEqual(

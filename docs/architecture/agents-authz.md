@@ -37,10 +37,12 @@ profiles           name → { trustPreset, runsIn, approvalMode }
 agents             slug → { profile, canCreateAgents, canCreateSkills, canAssignTasks,
                             grants[{key, scope?}], connectors{action → {state, externalSend}},
                             adapter{type, model?, allowedTools?}, trustBoundary?,
+                            hiringException?{justification, approvedBy[], approvedAt},
                             owner, justification, reviewedAt }
 environments       staging | production → { companyId?, agentIds{slug → uuid}, overrides{slug → partial agent} }
 ```
 
+- **Hiring exception.** `canCreateAgents=true` is allowed only with an explicit `hiringException` (justification, who approved it, when). It is allowed only while `requireBoardApprovalForNewAgents` is on, so every hire the agent proposes still needs a board decision. It can never come from an environment override. `agents:create` as a grant stays forbidden. Today only the CEO holds one (decided by Pierre on 2026-11-05).
 - **Identity.** Agents are keyed by a stable slug. Paperclip UUIDs are mapped per
   environment and are **read from Paperclip, never guessed**. An override may change any
   agent field except `owner`, `justification` and `reviewedAt`.
@@ -73,18 +75,18 @@ Evaluated on the **effective** agent of **both** environments, so an override ca
 a forbidden setting past review. Each rule has a negative fixture in
 `packages/core/src/__fixtures__/agents-authz/`.
 
-| Rule                       | Fails when                                                                                                  | Fixture                                                                |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `no-hiring`                | `canCreateAgents=true` or an `agents:create` grant (no exception in v1)                                     | `business-can-hire`, `business-hiring-grant`, `override-sneaks-hiring` |
-| `host-not-full-auto`       | a profile with `runsIn: host` and `approvalMode: full_auto`                                                 | `business-full-auto`                                                   |
-| `low-trust-sandbox`        | `low_trust_review` with `runsIn ≠ sandbox`                                                                  | `low-trust-on-host`                                                    |
-| `low-trust-boundary`       | `low_trust_review` without `rootIssueId` / `projectIds` / `issueIds`                                        | `low-trust-without-scope`                                              |
-| `external-send`            | an external-send action is `allowed`, or a send-like action is not flagged `externalSend`                   | `business-sends-without-approval`, `send-not-flagged`                  |
-| `board-approval-for-hires` | `company.requireBoardApprovalForNewAgents ≠ true`                                                           | `hires-without-board-approval`                                         |
-| `unique-agent-id`          | one Paperclip id mapped to two slugs in an environment                                                      | `duplicate-agent-id`                                                   |
-| `review-date`              | `reviewedAt` older than **120 days** (warning from 100), or in the future                                   | `stale-review`                                                         |
-| `runner-api-tools-off`     | `instance.runnerApiToolsEnabled=true`, or any Terraform file sets `PAPERCLIP_RUNNER_API_TOOLS_ENABLED=true` | test                                                                   |
-| schema                     | missing `owner` / `justification` / `reviewedAt`, unknown permission key, unknown field                     | `missing-owner`, `unknown-permission-key`                              |
+| Rule                       | Fails when                                                                                                                                                                              | Fixture                                                                                     |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `no-hiring`                | `canCreateAgents=true` without an explicit `hiringException`; any `agents:create` grant; a `hiringException` while board approval of hires is off. An override cannot add an exception. | `business-can-hire`, `business-hiring-grant`, `override-sneaks-hiring`, `hiring-exception*` |
+| `host-not-full-auto`       | a profile with `runsIn: host` and `approvalMode: full_auto`                                                                                                                             | `business-full-auto`                                                                        |
+| `low-trust-sandbox`        | `low_trust_review` with `runsIn ≠ sandbox`                                                                                                                                              | `low-trust-on-host`                                                                         |
+| `low-trust-boundary`       | `low_trust_review` without `rootIssueId` / `projectIds` / `issueIds`                                                                                                                    | `low-trust-without-scope`                                                                   |
+| `external-send`            | an external-send action is `allowed`, or a send-like action is not flagged `externalSend`                                                                                               | `business-sends-without-approval`, `send-not-flagged`                                       |
+| `board-approval-for-hires` | `company.requireBoardApprovalForNewAgents ≠ true`                                                                                                                                       | `hires-without-board-approval`                                                              |
+| `unique-agent-id`          | one Paperclip id mapped to two slugs in an environment                                                                                                                                  | `duplicate-agent-id`                                                                        |
+| `review-date`              | `reviewedAt` older than **120 days** (warning from 100), or in the future                                                                                                               | `stale-review`                                                                              |
+| `runner-api-tools-off`     | `instance.runnerApiToolsEnabled=true`, or any Terraform file sets `PAPERCLIP_RUNNER_API_TOOLS_ENABLED=true`                                                                             | test                                                                                        |
+| schema                     | missing `owner` / `justification` / `reviewedAt`, unknown permission key, unknown field                                                                                                 | `missing-owner`, `unknown-permission-key`                                                   |
 
 The 120-day limit fails **every** CI run once any agent is overdue. That is deliberate: it
 is the quarterly access review, and it cannot be skipped silently.
@@ -160,8 +162,8 @@ Repository → Settings → Branches → branch protection rule for `main`:
 
 Also:
 
-- Add Denis as a collaborator with **Write** access, and his login to every line of
-  `.github/CODEOWNERS`. Code owners on a personal-account repository must have write access.
+- Make sure Denis (`@denis-gs`) is a collaborator with **Write** access. Code owners on a
+  personal-account repository must have write access, or GitHub ignores their CODEOWNERS entry.
 - Do **not** give the GitHub App (`grafmaker-henri[bot]`) or any agent token the right to
   approve: the App needs `pull_requests: write` to open PRs. Its approvals would not count
   anyway, because it is not a code owner.
@@ -200,14 +202,19 @@ described in `CLAUDE.md` (Chief of Staff, Data Officer, Finance, HR, Sales Ops) 
 exist in Paperclip**. They are not listed in the file, and they will be added by PR when
 created.
 
-**Expected drift on the first staging run** (target posture vs today):
+**Aligned on staging on 2026-11-05** (Pierre's decision, applied through ECS Exec and read back; no other field changed):
 
-| Finding                                                  | Decision needed                                          |
-| -------------------------------------------------------- | -------------------------------------------------------- |
-| `company.requireBoardApprovalForNewAgents`: false → true | Switch on (Settings → General → Hiring)                  |
-| `ceo` `canCreateAgents`: true → false                    | Switch off (agent → Permissions)                         |
-| `ceo` `dangerouslySkipPermissions`: true → false         | Set false, **before** any ≥ 2026.1001 upgrade            |
-| `canCreateSkills`: true → false (all 3)                  | Confirm none of the agents needs to create/import skills |
+- `company.requireBoardApprovalForNewAgents`: false → **true**
+- `ceo` `adapterConfig.dangerouslySkipPermissions`: true → **false**
+- `ceo` `canCreateAgents` stays **true**, now declared through a `hiringException`.
+
+**Expected drift on the first staging run:**
+
+| Finding                                 | Decision needed                                             |
+| --------------------------------------- | ----------------------------------------------------------- |
+| `canCreateSkills`: true → false (all 3) | Confirm none of the agents needs to create or import skills |
+
+Production has not been touched: apply the same two changes there, then fill in its agent ids.
 
 Out of scope but found: the CEO agent's `adapterConfig.env` stores `ANTHROPIC_API_KEY` in
 **plaintext**, returned unmasked by `GET /api/agents` (already known; SOC 2 finding).
@@ -267,8 +274,8 @@ Explicit restrictive modes set **before** 2026.1001 are preserved; unset ones si
 become full-auto. Hence:
 
 1. **Set explicit values first, on 824.1:** `dangerouslySkipPermissions=false` on every
-   restricted `claude_local` agent (today: the **CEO** is explicitly `true`, so it would stay
-   full-auto). Set an explicit model on every agent: since 2026.916, unset Claude models
+   restricted `claude_local` agent (the CEO was explicitly `true` and was set to `false` on
+   staging on 2026-11-05; production still needs it). Set an explicit model on every agent: since 2026.916, unset Claude models
    resolve to Opus 5. Switch `requireBoardApprovalForNewAgents` on, because since 2026.916
    new standard agents can hire by default. Run the drift job and **get it clean except
    `unverifiable`** before going further.

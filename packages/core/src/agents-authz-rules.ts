@@ -28,8 +28,9 @@ export const REVIEW_WARN_DAYS = 100;
 export const REVIEW_FAIL_DAYS = 120;
 
 /**
- * Permission keys that let an agent create or hire agents. v1 allows NO exception: an
- * agent that needs one is a design change, not a config change.
+ * Permission keys that let an agent create or hire agents. Never allowed as a grant: the
+ * only sanctioned path is the `canCreateAgents` switch backed by an explicit
+ * `hiringException`, with board approval of hires switched on.
  */
 const HIRING_KEYS = new Set(['agents:create']);
 
@@ -56,11 +57,12 @@ function checkAgent(
   const base = { environment: env, agent: agent.slug };
   const p = agent.resolvedProfile;
 
-  if (agent.canCreateAgents) {
+  if (agent.canCreateAgents && !agent.hiringException) {
     push({
       ...base,
       rule: 'no-hiring',
-      message: 'canCreateAgents must be false (no exception in v1)',
+      message:
+        'canCreateAgents=true requires an explicit hiringException (justification, approvedBy)',
     });
   }
   for (const g of agent.grants) {
@@ -148,6 +150,14 @@ export function validateAgentsAuthzRules(
   }
 
   for (const [slug, agent] of Object.entries(config.agents)) {
+    if (agent.hiringException && config.company.requireBoardApprovalForNewAgents !== true) {
+      errors.push({
+        rule: 'no-hiring',
+        agent: slug,
+        message:
+          'a hiringException requires company.requireBoardApprovalForNewAgents=true (hires stay board-approved)',
+      });
+    }
     if (!config.profiles[agent.profile]) {
       errors.push({
         rule: 'known-profile',

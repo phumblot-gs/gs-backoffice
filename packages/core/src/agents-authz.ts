@@ -134,6 +134,21 @@ export const AdapterSchema = z
   .strict();
 export type Adapter = z.infer<typeof AdapterSchema>;
 
+/**
+ * Explicit, justified exception allowing `canCreateAgents=true` for ONE agent. Hires it
+ * proposes still need board approval: the rules require
+ * `company.requireBoardApprovalForNewAgents=true` whenever an exception exists. It is
+ * governance metadata, so an environment override cannot add or change it.
+ */
+export const HiringExceptionSchema = z
+  .object({
+    justification: z.string().trim().min(10),
+    approvedBy: z.array(z.string().trim().min(1)).min(1),
+    approvedAt: IsoDateSchema,
+  })
+  .strict();
+export type HiringException = z.infer<typeof HiringExceptionSchema>;
+
 const AgentFieldsSchema = z.object({
   profile: z.string().min(1),
   canCreateAgents: z.boolean(),
@@ -143,6 +158,7 @@ const AgentFieldsSchema = z.object({
   connectors: z.record(z.string().min(1), ConnectorActionSchema),
   adapter: AdapterSchema,
   trustBoundary: TrustBoundarySchema.optional(),
+  hiringException: HiringExceptionSchema.optional(),
   owner: z.string().trim().min(1),
   justification: z.string().trim().min(10),
   reviewedAt: IsoDateSchema,
@@ -151,8 +167,9 @@ const AgentFieldsSchema = z.object({
 export const AgentSchema = AgentFieldsSchema.strict();
 export type AgentAuthz = z.infer<typeof AgentSchema>;
 
-/** Per-environment override: any agent field except identity/governance metadata. */
+/** Per-environment override: any agent field except governance metadata (incl. hiringException). */
 export const AgentOverrideSchema = AgentFieldsSchema.omit({
+  hiringException: true,
   owner: true,
   justification: true,
   reviewedAt: true,

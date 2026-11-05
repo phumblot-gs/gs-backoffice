@@ -18,7 +18,7 @@
   "agents": {
     "ceo": {
       "profile": "business",
-      "canCreateAgents": false,
+      "canCreateAgents": true,
       "canCreateSkills": false,
       "canAssignTasks": true,
       "grants": [],
@@ -27,8 +27,13 @@
         "type": "claude_local",
         "model": "claude-haiku-4-5-20251001"
       },
+      "hiringException": {
+        "justification": "Top of the org chart: may propose new agents. Every hire it proposes still requires board approval (requireBoardApprovalForNewAgents=true), and the new agent is reported as unknown_agent until a PR declares it.",
+        "approvedBy": ["pierre"],
+        "approvedAt": "2026-11-05"
+      },
       "owner": "pierre",
-      "justification": "Top of the Paperclip org chart. Only approves and delegates evolution requests to the Methods Officer; needs no hiring, skill authoring or tool bypass.",
+      "justification": "Top of the Paperclip org chart. Approves and delegates evolution requests to the Methods Officer, and may propose new agents (board-approved). Restricted harness: no permission bypass, no skill authoring.",
       "reviewedAt": "2026-11-05"
     },
     "methods-officer": {
