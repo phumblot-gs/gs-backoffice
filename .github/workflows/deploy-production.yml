@@ -173,11 +173,18 @@ jobs:
             --service notify-consumer \
             --force-new-deployment
 
+      - name: Update Audit consumer service
+        run: |
+          aws ecs update-service \
+            --cluster gs-backoffice-production \
+            --service audit-consumer \
+            --force-new-deployment
+
       - name: Wait for services stable
         run: |
           aws ecs wait services-stable \
             --cluster gs-backoffice-production \
-            --services paperclip mcp-server notify-consumer
+            --services paperclip mcp-server notify-consumer audit-consumer
         timeout-minutes: 10
 
   notify:
