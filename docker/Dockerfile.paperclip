@@ -26,6 +26,7 @@ RUN pnpm install --frozen-lockfile \
   && pnpm --filter @gs-backoffice/sandbox-fly-sprites \
           --filter @gs-backoffice/budget-plugin \
           --filter @gs-backoffice/authz-drift-plugin \
+          --filter @gs-backoffice/anthropic-federation \
           --filter @gs-backoffice/agent-sandbox-mcp build
 # Standalone bundle: built dist + manifest + its single prod dep (@paperclipai/plugin-sdk).
 RUN mkdir -p /opt/gs-plugins/plugin-fly-sprites \
@@ -65,6 +66,11 @@ RUN printf '%s\n' '{"mcpServers":{"gs-sandbox":{"command":"node","args":["/opt/g
 # Bake the RBAC config so the bridge can resolve the per-repo notify scope
 # (repos → scope) for PR-review Google Chat notifications. Synced with RBAC at deploy.
 COPY config/rbac.json /opt/gs-agent-tools/rbac.json
+# Keyless Anthropic auth (workload identity federation): the token refresher, one
+# self-contained bundle (AWS SDK inlined). Started by the entrypoint only when
+# GS_ANTHROPIC_AUTH=federation. See docs/architecture/anthropic-federation.md.
+RUN mkdir -p /opt/gs-agent-tools/anthropic-federation \
+  && cp packages/anthropic-federation/dist/refresher.mjs /opt/gs-agent-tools/anthropic-federation/refresher.mjs
 # Bake the agent authorizations (source of truth for the drift job). Read fail-closed:
 # a missing or invalid file makes the job alert, never pass.
 COPY config/agents-authz.json /opt/gs-agent-tools/agents-authz.json
@@ -85,6 +91,8 @@ RUN node /tmp/patch-paperclip-plugin-env.mjs && rm -f /tmp/patch-paperclip-plugi
 COPY docker/patches/patch-paperclip-tool-timeout.mjs /tmp/patch-paperclip-tool-timeout.mjs
 RUN node /tmp/patch-paperclip-tool-timeout.mjs && rm -f /tmp/patch-paperclip-tool-timeout.mjs
 RUN mkdir -p /paperclip && chown node:node /paperclip
+# Owner-only directory for the federation token files (identity JWT, sandbox token).
+RUN mkdir -p /run/anthropic && chown node:node /run/anthropic && chmod 700 /run/anthropic
 # Bake the self-contained plugin at a stable path (outside the instance plugins
 # dir, so Paperclip references it without managing/cleaning it).
 COPY --from=plugin-build --chown=node:node /opt/gs-plugins /opt/gs-plugins

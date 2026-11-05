@@ -61,6 +61,13 @@ module "load_balancer" {
 module "compute" {
   source = "../../modules/compute"
 
+  # Anthropic auth: "api_key" (static key) or "federation" (keyless workload identity
+  # federation, docs/architecture/anthropic-federation.md). The federation ids are
+  # identifiers from the Claude Console, not secrets. Flip only after the human
+  # prerequisites in the runbook are done.
+  anthropic_auth       = "api_key"
+  anthropic_federation = {}
+
   environment  = var.environment
   project_name = var.project_name
   aws_region   = var.aws_region
