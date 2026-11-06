@@ -52,17 +52,27 @@ environments       staging | production → { companyId?, agentIds{slug → uuid
 - **`approvalMode`** is abstract (`restricted` | `read_only` | `full_auto`). It is translated
   per adapter by a tested table, so adapter flags never appear in agent entries:
 
-  | approvalMode | `claude_local` (verified)                                       | other adapters             |
-  | ------------ | --------------------------------------------------------------- | -------------------------- |
-  | `restricted` | `dangerouslySkipPermissions=false`, no bypass flag in extraArgs | `unverifiable` (see below) |
-  | `read_only`  | same flag; read-only is enforced by `adapter.allowedTools`      | `unverifiable`             |
-  | `full_auto`  | `dangerouslySkipPermissions=true` (sandbox-only, rule-enforced) | `unverifiable`             |
+  | approvalMode | `claude_local` (verified)                                                         | other adapters             |
+  | ------------ | --------------------------------------------------------------------------------- | -------------------------- |
+  | `restricted` | **`engine=cli`**, `dangerouslySkipPermissions=false`, no bypass flag in extraArgs | `unverifiable` (see below) |
+  | `read_only`  | same; read-only is enforced by `adapter.allowedTools`                             | `unverifiable`             |
+  | `full_auto`  | `dangerouslySkipPermissions=true` (sandbox-only, rule-enforced)                   | `unverifiable`             |
 
-  An **unset** `dangerouslySkipPermissions` is judged by Paperclip's default, `true`, so it
-  is drift for a restricted agent. Paperclip 2026.824.1 has no ACPX adapter, and neither
-  its OpenAPI spec nor its shared types define an approval key for `codex_local` /
-  `opencode_local` (`approvalPolicy`, `permissionMode` and `acpxPermissionMode` appear
-  nowhere). Those rows are `null` and report `unverifiable` until filled from a running instance.
+  Unset fields are judged by Paperclip's defaults: `dangerouslySkipPermissions` defaults
+  to `true`, and `engine` defaults to `auto`, so both are drift for a restricted agent.
+
+  **The `claude_local` adapter has two engines.** Only the CLI engine (`engine: "cli"`)
+  honours `dangerouslySkipPermissions` and the `--allowedTools` list in `extraArgs`. The
+  ACP engine is selected by `acp`, and also by `auto`, which is the default and prefers
+  ACP whenever Node is 22.12 or newer. It runs with its own `permissionMode`, which defaults
+  to **`approve-all`**, and ignores both controls. Found on staging on 2026-11-06: all three
+  agents were on the default, and the Engineer ran shell (`Terminal`) and `Edit` tools on
+  the Paperclip host instead of the sandbox tools. All three were set to `engine: "cli"`
+  that day (Pierre's decision).
+
+  `codex_local` / `opencode_local` define no approval key in 2026.824.1 (`approvalPolicy`
+  appears nowhere). Those rows are `null` and report `unverifiable` until filled in from a
+  running instance.
 
 - **Grant `scope`** is opaque: the OpenAPI spec types it as `object, additionalProperties: {}`
   and documents no selector syntax (`scope.allow` appears nowhere). It is stored verbatim
@@ -216,7 +226,12 @@ created.
 | --------------------------------------- | ----------------------------------------------------------- |
 | `canCreateSkills`: true → false (all 3) | Confirm none of the agents needs to create or import skills |
 
-Production has not been touched: apply the same two changes there, then fill in its agent ids.
+Also aligned on 2026-11-06: `adapterConfig.engine` was unset (`auto`, i.e. the ACP engine
+with `approve-all`) on all three agents. It was set to `cli` and read back, with no other
+field changed.
+
+There is no production environment yet (no ECS cluster, no secrets) as of 2026-11-06.
+When one is created, apply the same changes there, then fill in its agent ids.
 
 **CEO plaintext key — removed on staging on 2026-11-05.** The CEO agent's `adapterConfig.env`
 held its own `ANTHROPIC_API_KEY` in plaintext, returned unmasked by `GET /api/agents`. It was
@@ -229,18 +244,18 @@ drift job now reports any plaintext env value by name.
 
 ## Where the docs and the real API disagree (2026.824.1)
 
-| Expected (task brief / docs)                                                           | Reality                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Company setting `requireBoardApprovalForHires`                                         | `requireBoardApprovalForNewAgents` (company object)                                                                                                                                                                     |
-| `trustBoundary` alongside `trustPreset`                                                | `permissions.authorizationPolicy.trustBoundary`, strict, with required `mode: "low_trust_review"`; `trustPreset` at `permissions.trustPreset` or `authorizationPolicy.trustPreset`                                      |
-| `canAssignTasks` is an agent switch                                                    | Writable via `PATCH /api/agents/{id}/permissions`, but the read side is derived (`access.taskAssignSource`: `simple_default`, `explicit_grant`, `agent_creator`, `ceo_role`) and **absent** from `GET /api/agents/{id}` |
-| ~21 permission keys                                                                    | Exactly 21 (OpenAPI enum), including `audit:view_agent_actions` and `pipelines:write`                                                                                                                                   |
-| `scope.allow` syntax for tool grants                                                   | Not in the spec: `scope` is `object, additionalProperties: {}, nullable`                                                                                                                                                |
-| ACPX `permissionMode` / `acpxPermissionMode`, Codex `approvalPolicy`                   | Not present in 2026.824.1 (no ACPX adapter; no approval key in spec or shared types)                                                                                                                                    |
-| Claude `dangerouslySkipPermissions` per agent                                          | Confirmed: `adapterConfig.dangerouslySkipPermissions`, set via `PATCH /api/agents/{id}`                                                                                                                                 |
-| Experimental flags `enablePublicMcp`, `enableGitHubReviewBots`, `enableMcpAggregators` | Do not exist in 2026.824.1 (presumably later releases)                                                                                                                                                                  |
-| Connector actions `Allowed` / `Ask first` / `Off`                                      | Confirmed as `allowed` / `ask_first` / `off` (`ToolConnectionTestDecision`), but not readable by plugins                                                                                                                |
-| Agent grants visible per agent                                                         | Not in `GET /api/agents/{id}` nor in `/members` (humans only); readable through the plugin SDK `authorization.grants.list`                                                                                              |
+| Expected (task brief / docs)                                                           | Reality                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Company setting `requireBoardApprovalForHires`                                         | `requireBoardApprovalForNewAgents` (company object)                                                                                                                                                                                                                            |
+| `trustBoundary` alongside `trustPreset`                                                | `permissions.authorizationPolicy.trustBoundary`, strict, with required `mode: "low_trust_review"`; `trustPreset` at `permissions.trustPreset` or `authorizationPolicy.trustPreset`                                                                                             |
+| `canAssignTasks` is an agent switch                                                    | Writable via `PATCH /api/agents/{id}/permissions`, but the read side is derived (`access.taskAssignSource`: `simple_default`, `explicit_grant`, `agent_creator`, `ceo_role`) and **absent** from `GET /api/agents/{id}`                                                        |
+| ~21 permission keys                                                                    | Exactly 21 (OpenAPI enum), including `audit:view_agent_actions` and `pipelines:write`                                                                                                                                                                                          |
+| `scope.allow` syntax for tool grants                                                   | Not in the spec: `scope` is `object, additionalProperties: {}, nullable`                                                                                                                                                                                                       |
+| ACPX as a separate adapter, `acpxPermissionMode`                                       | ACP is an **engine of `claude_local`** (`adapterConfig.engine`: `auto` (default, prefers ACP) / `acp` / `cli`), with `adapterConfig.permissionMode` (alias `acpPermissionMode`) defaulting to **`approve-all`** **already in 2026.824.1**. Codex `approvalPolicy`: not present |
+| Claude `dangerouslySkipPermissions` per agent                                          | Confirmed: `adapterConfig.dangerouslySkipPermissions`, set via `PATCH /api/agents/{id}`                                                                                                                                                                                        |
+| Experimental flags `enablePublicMcp`, `enableGitHubReviewBots`, `enableMcpAggregators` | Do not exist in 2026.824.1 (presumably later releases)                                                                                                                                                                                                                         |
+| Connector actions `Allowed` / `Ask first` / `Off`                                      | Confirmed as `allowed` / `ask_first` / `off` (`ToolConnectionTestDecision`), but not readable by plugins                                                                                                                                                                       |
+| Agent grants visible per agent                                                         | Not in `GET /api/agents/{id}` nor in `/members` (humans only); readable through the plugin SDK `authorization.grants.list`                                                                                                                                                     |
 
 ## Runbook
 
@@ -281,7 +296,8 @@ Paperclip first shows up as drift until the PR lands, and that is intended.
 Explicit restrictive modes set **before** 2026.1001 are preserved; unset ones silently
 become full-auto. Hence:
 
-1. **Set explicit values first, on 824.1:** `dangerouslySkipPermissions=false` on every
+1. **Set explicit values first, on 824.1:** `engine: "cli"` on every restricted
+   `claude_local` agent (done on staging on 2026-11-06), and `dangerouslySkipPermissions=false` on every
    restricted `claude_local` agent (the CEO was explicitly `true` and was set to `false` on
    staging on 2026-11-05; production still needs it). Set an explicit model on every agent: since 2026.916, unset Claude models
    resolve to Opus 5. Switch `requireBoardApprovalForNewAgents` on, because since 2026.916

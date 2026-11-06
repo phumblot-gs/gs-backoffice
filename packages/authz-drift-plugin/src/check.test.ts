@@ -52,6 +52,7 @@ function compliantWorld() {
           }
         : {}),
       dangerouslySkipPermissions: false,
+      engine: 'cli',
     },
     permissions: { canCreateAgents: false, canCreateSkills: false },
   });
@@ -174,6 +175,20 @@ describe('authz drift job (mocked Paperclip)', () => {
     expect(
       actionable(h.published).map((e) => [e.payload.agentSlug, e.payload.path, e.payload.actual]),
     ).toEqual([['methods-officer', 'adapterConfig.dangerouslySkipPermissions', true]]);
+  });
+
+  it('detects the ACP engine default (the real staging state until 2026-11-06)', async () => {
+    const w = compliantWorld();
+    for (const a of w.agents) delete (a.adapterConfig as Rec).engine;
+    const h = harness(w);
+    await runDriftCheck(h.deps);
+    expect(
+      actionable(h.published).map((e) => [e.payload.agentSlug, e.payload.path, e.payload.actual]),
+    ).toEqual([
+      ['ceo', 'adapterConfig.engine', 'unset (defaults to "auto")'],
+      ['methods-officer', 'adapterConfig.engine', 'unset (defaults to "auto")'],
+      ['engineer', 'adapterConfig.engine', 'unset (defaults to "auto")'],
+    ]);
   });
 
   it('detects the approval flag being unset (Paperclip defaults it to bypass)', async () => {
