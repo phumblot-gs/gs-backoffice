@@ -413,7 +413,7 @@ export async function reportProgress(
   cfg: ProxyConfig,
   input: ReportInput,
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
-): Promise<{ status: string; identifier?: string }> {
+): Promise<{ status: string; identifier?: string; handedBackForReview: boolean }> {
   const issueId = (input.issueId || cfg.taskIssueId || '').trim();
   if (!issueId) {
     throw new Error(
@@ -430,6 +430,26 @@ export async function reportProgress(
   if (input.comment) payload.comment = input.comment;
 
   const url = `${cfg.apiUrl}/api/issues/${issueId}`;
+  let handedBackForReview = false;
+  if (input.status === 'in_review') {
+    // Paperclip 2026.824.1 refuses an agent's move to in_review unless someone owns the
+    // next action (422 invalid_issue_disposition). The path an agent may take without
+    // tasks:assign is to hand the issue back to the HUMAN who created it — exactly our
+    // review gate (the requester reviews the PR). A step delegated by another agent has
+    // no human creator: it reports `done` and the delegating agent reviews it.
+    const creator = await readIssueCreator(cfg, issueId, fetchImpl);
+    if (!creator) {
+      throw new Error(
+        'agent-sandbox-mcp: report_progress cannot move this issue to in_review: it was created ' +
+          'by an agent (a delegated step), so no human reviewer owns the next action. Report ' +
+          'status "done" with your result (the agent that created the step is woken and reviews ' +
+          'it), or "blocked" with the reason.',
+      );
+    }
+    payload.assigneeUserId = creator;
+    payload.assigneeAgentId = null;
+    handedBackForReview = true;
+  }
   let res;
   try {
     res = await fetchImpl(url, {
@@ -458,7 +478,28 @@ export async function reportProgress(
   } catch {
     /* the route returns the updated issue; a non-JSON body is non-fatal */
   }
-  return { status: parsed.status ?? 'updated', identifier: parsed.identifier };
+  return { status: parsed.status ?? 'updated', identifier: parsed.identifier, handedBackForReview };
+}
+
+/** The human (`createdByUserId`) who created an issue, or null when an agent did. */
+async function readIssueCreator(
+  cfg: ProxyConfig,
+  issueId: string,
+  fetchImpl: FetchLike,
+): Promise<string | null> {
+  const res = await fetchImpl(`${cfg.apiUrl}/api/issues/${issueId}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${cfg.apiKey}` },
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `agent-sandbox-mcp: report_progress could not read issue ${issueId} → HTTP ${res.status}: ${raw.slice(0, 300)}`,
+    );
+  }
+  const issue = JSON.parse(raw) as { createdByUserId?: string | null };
+  const creator = typeof issue.createdByUserId === 'string' ? issue.createdByUserId.trim() : '';
+  return creator || null;
 }
 
 // ---------------------------------------------------------------------------

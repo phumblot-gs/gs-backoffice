@@ -157,5 +157,14 @@ Validation results (staging, 2026-11-06):
   workspace. The first failure reason was `no_workspace`.
 - Methods Officer and Engineer heartbeats started concurrently, with no auth error. The
   Engineer run succeeded: ✅
-- Cost booked to the budget: ❌ booked at 0 cents. Fixed by the billing patch, to be
-  re-validated after deployment.
+- Cost booked to the budget: ❌ booked at 0 cents at first. Fixed by the billing patch
+  (#129) and re-validated: ✅
+- `sandbox_code_task` with `ANTHROPIC_AUTH_TOKEN` in the Sprite (GRA-52, PR #134): ✅
+
+**Static key removed (2026-11-06).** `ANTHROPIC_API_KEY` was deleted from
+`gs-backoffice/staging/app`, and `gs-backoffice/staging/paperclip/anthropic-api-key` (bound
+to the sandbox plugin's `anthropicKey`, never resolved under federation) was reset to
+`CHANGE_ME`. No task definition references the key. The old value survives only as the
+secret's `AWSPREVIOUS` version until the key is revoked in the Console. **Rollback now
+needs a new key:** create one, put it back in the app secret, then set
+`anthropic_auth = "api_key"`.

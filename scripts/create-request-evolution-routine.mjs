@@ -48,8 +48,9 @@ const DESCRIPTION = [
   '   install && pnpm verify` (lint + format:check + typecheck + tests) and fix any',
   '   failure. (Coding tasks already auto-format before committing, but run pnpm verify',
   '   to confirm CI will pass.)',
-  '4. Keep your issue updated with report_progress; set it to in_review/blocked if you',
-  '   need a human, or done when the PR is open.',
+  '4. Keep your issue updated with report_progress. Once the PR is open, set it to',
+  '   in_review (it goes back to the requester for review); use blocked if you need a',
+  '   human decision.',
   '',
   'Hard rules: a human merges the PR and approves the deploy — never bypass that.',
 ].join('\n');
