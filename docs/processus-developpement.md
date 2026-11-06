@@ -15,9 +15,11 @@ Tout membre de l'équipe dirigeante peut soumettre une demande d'évolution via 
 ## Mécanisme de validation
 
 Avant l'ouverture de toute PR, le code doit passer :
+
 ```
 corepack enable && pnpm install && pnpm verify
 ```
+
 Ce pipeline exécute : lint + format:check + typecheck + tests unitaires et d'intégration.
 
 Aucun merge automatique n'est autorisé — un humain doit toujours approuver.
