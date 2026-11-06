@@ -380,7 +380,7 @@ describe('reportProgress', () => {
       Authorization: 'Bearer k',
     });
     expect(JSON.parse(init.body as string)).toEqual({ status: 'done', comment: 'all good' });
-    expect(r).toEqual({ status: 'done', identifier: 'GRA-42' });
+    expect(r).toEqual({ status: 'done', identifier: 'GRA-42', handedBackForReview: false });
   });
 
   it('honors an explicit issueId override', async () => {
@@ -402,6 +402,40 @@ describe('reportProgress', () => {
     await expect(reportProgress(CFG_TASK, {}, f)).rejects.toThrow(
       /at least one of status or comment/,
     );
+  });
+
+  it('hands an in_review issue back to the human who created it', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const f = async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      const body =
+        init.method === 'GET'
+          ? { id: 'issue-default', createdByUserId: 'user-pierre', createdByAgentId: null }
+          : { status: 'in_review', identifier: 'GRA-50' };
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    };
+    const r = await reportProgress(CFG_TASK, { status: 'in_review', comment: 'PR #9' }, f);
+    expect(calls.map((c) => c.init.method)).toEqual(['GET', 'PATCH']);
+    expect(JSON.parse(calls[1].init.body as string)).toEqual({
+      status: 'in_review',
+      comment: 'PR #9',
+      assigneeUserId: 'user-pierre',
+      assigneeAgentId: null,
+    });
+    expect(r).toEqual({ status: 'in_review', identifier: 'GRA-50', handedBackForReview: true });
+  });
+
+  it('refuses in_review on a step an agent delegated, without calling PATCH', async () => {
+    const methods: string[] = [];
+    const f = async (_url: string, init: RequestInit) => {
+      methods.push(String(init.method));
+      const body = { id: 'step', createdByUserId: null, createdByAgentId: 'methods-officer' };
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    };
+    await expect(reportProgress(CFG_TASK, { status: 'in_review' }, f)).rejects.toThrow(
+      /created by an agent.*Report status "done"/,
+    );
+    expect(methods).toEqual(['GET']);
   });
 
   it('surfaces an HTTP error', async () => {

@@ -187,7 +187,7 @@ export function createServer(): McpServer {
 
   server.tool(
     'report_progress',
-    'Update YOUR current issue: set its status and/or post a comment. Use this to report results and move the issue to a final state (done / blocked / in_review) — it replaces shell+curl calls to the Paperclip API. Targets the current issue by default.',
+    'Update YOUR current issue: set its status and/or post a comment. Use this to report results and move the issue to a final state — it replaces shell+curl calls to the Paperclip API. Targets the current issue by default. "done": your work is finished (on a step another agent delegated to you, always use done — that agent is woken and reviews it). "blocked": you cannot continue; say why in the comment. "in_review": only on an issue a HUMAN created, once a PR is open; the issue is handed back to that person for review.',
     {
       status: z
         .enum(REPORT_STATUSES)
@@ -218,8 +218,9 @@ export function createServer(): McpServer {
               identifier: r.identifier,
             });
           }
+          const handoff = r.handedBackForReview ? ', handed back to its requester for review' : '';
           return textResult(
-            `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}).`.trim(),
+            `Issue ${r.identifier ?? cfg.taskIssueId ?? ''} updated (status: ${r.status}${handoff}).`.trim(),
           );
         } catch (err) {
           return textResult((err as Error).message, true);
