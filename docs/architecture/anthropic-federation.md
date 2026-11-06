@@ -112,10 +112,12 @@ Design points:
 3. **Two agent runs in parallel** both complete. This proves the `check_jti` decision.
 4. One `sandbox_code_task` completes with `ANTHROPIC_AUTH_TOKEN` in the Sprite. This
    pattern is not documented by Anthropic and is the main thing to prove.
-5. **Costs and budgets.** Paperclip derives `billingType` from the presence of
-   `ANTHROPIC_API_KEY`, so federated runs are labelled `subscription` instead of `api`.
-   Confirm that `costUsd` is still recorded and that a budget still blocks. Re-check this
-   during the 2026.1023 upgrade, which blocks "unpriced" usage by default.
+5. **Costs and budgets.** Without `ANTHROPIC_API_KEY`, the stock claude_local adapter
+   labels runs `subscription`, and the server books them at **0 cents**. This was observed
+   on 2026-11-06: an Engineer run reported `costUsd` 0.168 and `spentMonthlyCents` did not
+   move. `docker/patches/patch-paperclip-federation-billing.mjs` makes federation count as
+   metered API usage. After deploying it, confirm that a run's cost increases the
+   agent's `spentMonthlyCents`.
 6. Only then: remove `ANTHROPIC_API_KEY` from the app secret and **revoke the old keys**,
    including the former CEO key (last used around 2026-06-21).
 
@@ -146,3 +148,14 @@ harmless without the identity-token policy.
 
 Negative test (2026-11-06): JWTs minted for another principal of the account
 (`admin-terraform`) with both audiences were refused by the exchange (HTTP 401).
+
+Validation results (staging, 2026-11-06):
+
+- Identity JWT written every 3 minutes (0600, 300 s, `sub` = Paperclip task role): ✅
+- Agents exchange: HTTP 200 (access token about 430 s, which confirms the 2 × JWT-lifetime cap): ✅
+- Sandbox token minted (30 min): ✅, after adding the service accounts to the
+  workspace. The first failure reason was `no_workspace`.
+- Methods Officer and Engineer heartbeats started concurrently, with no auth error. The
+  Engineer run succeeded: ✅
+- Cost booked to the budget: ❌ booked at 0 cents. Fixed by the billing patch, to be
+  re-validated after deployment.

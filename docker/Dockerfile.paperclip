@@ -90,6 +90,11 @@ RUN node /tmp/patch-paperclip-plugin-env.mjs && rm -f /tmp/patch-paperclip-plugi
 # are not killed at 30s. Anchored + idempotent.
 COPY docker/patches/patch-paperclip-tool-timeout.mjs /tmp/patch-paperclip-tool-timeout.mjs
 RUN node /tmp/patch-paperclip-tool-timeout.mjs && rm -f /tmp/patch-paperclip-tool-timeout.mjs
+# Surgical patch: under workload identity federation (no static key) the claude_local
+# adapter labels runs "subscription" and the server books them at 0 cents, blinding
+# budgets. Federation now counts as metered API usage. See the patch header.
+COPY docker/patches/patch-paperclip-federation-billing.mjs /tmp/patch-paperclip-federation-billing.mjs
+RUN node /tmp/patch-paperclip-federation-billing.mjs && rm -f /tmp/patch-paperclip-federation-billing.mjs
 RUN mkdir -p /paperclip && chown node:node /paperclip
 # Owner-only directory for the federation token files (identity JWT, sandbox token).
 RUN mkdir -p /run/anthropic && chown node:node /run/anthropic && chmod 700 /run/anthropic
