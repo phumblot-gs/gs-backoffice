@@ -47,6 +47,19 @@ export const SECRET_ENV_NAME_RE =
 
 const ENVIRONMENTS: EnvironmentName[] = ['staging', 'production'];
 
+/**
+ * claude_local tools of the gs-sandbox MCP bridge that proxy to a plugin tool through the
+ * Paperclip tool gateway (apps/agent-sandbox-mcp/src/proxy.ts). Allowing one side
+ * without the other is either a broken agent (gateway 403) or a gateway grant that
+ * nothing declared uses.
+ */
+export const BRIDGE_PLUGIN_TOOLS: Readonly<Record<string, string>> = {
+  'mcp__gs-sandbox__sandbox_run': 'gs-backoffice.fly-sprites-sandbox-provider:sandbox_run',
+  'mcp__gs-sandbox__sandbox_code_task':
+    'gs-backoffice.fly-sprites-sandbox-provider:sandbox_code_task',
+  'mcp__gs-sandbox__sandbox_release': 'gs-backoffice.fly-sprites-sandbox-provider:sandbox_release',
+};
+
 function daysBetween(fromIso: string, today: Date): number {
   const from = Date.parse(`${fromIso}T00:00:00Z`);
   const to = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
@@ -105,6 +118,29 @@ function checkAgent(
         ...base,
         rule: 'no-plaintext-secret-env',
         message: `env "${name}" looks like a credential and cannot be allowed in plaintext — use a secret reference`,
+      });
+    }
+  }
+
+  if (new Set(agent.pluginTools).size !== agent.pluginTools.length) {
+    push({ ...base, rule: 'plugin-tools-match-bridge', message: 'duplicate pluginTools entry' });
+  }
+  const allowed = new Set(agent.adapter.allowedTools ?? []);
+  for (const [bridgeTool, pluginTool] of Object.entries(BRIDGE_PLUGIN_TOOLS)) {
+    const inHarness = allowed.has(bridgeTool);
+    const inGateway = agent.pluginTools.includes(pluginTool);
+    if (inHarness && !inGateway) {
+      push({
+        ...base,
+        rule: 'plugin-tools-match-bridge',
+        message: `adapter.allowedTools has "${bridgeTool}" but pluginTools lacks "${pluginTool}" (the gateway would deny it)`,
+      });
+    }
+    if (inGateway && !inHarness) {
+      push({
+        ...base,
+        rule: 'plugin-tools-match-bridge',
+        message: `pluginTools has "${pluginTool}" but adapter.allowedTools lacks "${bridgeTool}" (unused gateway access)`,
       });
     }
   }

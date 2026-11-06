@@ -123,6 +123,18 @@ export const ConnectorActionSchema = z
   .strict();
 export type ConnectorAction = z.infer<typeof ConnectorActionSchema>;
 
+/**
+ * A plugin tool the agent may call through the Paperclip tool gateway, written exactly as
+ * the gateway names it: `<pluginKey>:<toolName>` (the `toolName` of a `tool_name` entry
+ * in a tool access profile). Since 2026.824.1 the gateway denies by default, so this list
+ * is the agent's complete set of plugin tools. Profiles are not readable by plugins: the
+ * drift job reports this field `unverifiable` and the runbook has a manual check.
+ */
+export const PluginToolSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9.-]*:[a-z0-9_]+$/, 'plugin tool: <pluginKey>:<toolName>');
+export type PluginTool = z.infer<typeof PluginToolSchema>;
+
 /** Adapter-level expectations. Only allow-listed, non-secret fields are modelled. */
 export const AdapterSchema = z
   .object({
@@ -163,6 +175,7 @@ const AgentFieldsSchema = z.object({
   canAssignTasks: z.boolean(),
   grants: z.array(GrantSchema),
   connectors: z.record(z.string().min(1), ConnectorActionSchema),
+  pluginTools: z.array(PluginToolSchema),
   adapter: AdapterSchema,
   trustBoundary: TrustBoundarySchema.optional(),
   hiringException: HiringExceptionSchema.optional(),

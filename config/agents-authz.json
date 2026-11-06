@@ -23,6 +23,7 @@
       "canAssignTasks": true,
       "grants": [],
       "connectors": {},
+      "pluginTools": [],
       "adapter": {
         "type": "claude_local",
         "model": "claude-haiku-4-5-20251001"
@@ -43,6 +44,11 @@
       "canAssignTasks": true,
       "grants": [],
       "connectors": {},
+      "pluginTools": [
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_run",
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_code_task",
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_release"
+      ],
       "adapter": {
         "type": "claude_local",
         "model": "claude-sonnet-4-6",
@@ -74,6 +80,11 @@
       "canAssignTasks": false,
       "grants": [],
       "connectors": {},
+      "pluginTools": [
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_run",
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_code_task",
+        "gs-backoffice.fly-sprites-sandbox-provider:sandbox_release"
+      ],
       "adapter": {
         "type": "claude_local",
         "model": "claude-haiku-4-5-20251001",

@@ -36,6 +36,7 @@ instance           runnerApiToolsEnabled (must be false), experimentalFlagsOff[]
 profiles           name → { trustPreset, runsIn, approvalMode }
 agents             slug → { profile, canCreateAgents, canCreateSkills, canAssignTasks,
                             grants[{key, scope?}], connectors{action → {state, externalSend}},
+                            pluginTools[],
                             adapter{type, model?, allowedTools?, plainEnvAllowed?}, trustBoundary?,
                             hiringException?{justification, approvedBy[], approvedAt},
                             owner, justification, reviewedAt }
@@ -46,6 +47,12 @@ environments       staging | production → { companyId?, agentIds{slug → uuid
 - **Identity.** Agents are keyed by a stable slug. Paperclip UUIDs are mapped per
   environment and are **read from Paperclip, never guessed**. An override may change any
   agent field except `owner`, `justification` and `reviewedAt`.
+- **`pluginTools`** lists every plugin tool the agent may call through the Paperclip tool
+  gateway, named as the gateway names it: `<pluginKey>:<toolName>`. Since 2026.824.1 the
+  gateway evaluates tool policies, then explicit grants, then the agent's tool access
+  profiles, and **denies by default**. In Paperclip this list is the `tool_name` entries
+  of the `gs-sandbox-tools` profile (`defaultAction: deny`), bound to the Methods Officer
+  and the Engineer only. Grants are not used for this: their scope syntax is undocumented.
 - **`runsIn`** is where the agent's _harness_ runs. `host` = inside the Paperclip container.
   Our Engineer and Methods Officer run on the host and only _call_ the Fly Sprites sandbox
   tools; the code runs in the sandbox, the harness does not.
@@ -86,19 +93,20 @@ Evaluated on the **effective** agent of **both** environments, so an override ca
 a forbidden setting past review. Each rule has a negative fixture in
 `packages/core/src/__fixtures__/agents-authz/`.
 
-| Rule                       | Fails when                                                                                                                                                                              | Fixture                                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `no-hiring`                | `canCreateAgents=true` without an explicit `hiringException`; any `agents:create` grant; a `hiringException` while board approval of hires is off. An override cannot add an exception. | `business-can-hire`, `business-hiring-grant`, `override-sneaks-hiring`, `hiring-exception*` |
-| `host-not-full-auto`       | a profile with `runsIn: host` and `approvalMode: full_auto`                                                                                                                             | `business-full-auto`                                                                        |
-| `low-trust-sandbox`        | `low_trust_review` with `runsIn ≠ sandbox`                                                                                                                                              | `low-trust-on-host`                                                                         |
-| `low-trust-boundary`       | `low_trust_review` without `rootIssueId` / `projectIds` / `issueIds`                                                                                                                    | `low-trust-without-scope`                                                                   |
-| `external-send`            | an external-send action is `allowed`, or a send-like action is not flagged `externalSend`                                                                                               | `business-sends-without-approval`, `send-not-flagged`                                       |
-| `board-approval-for-hires` | `company.requireBoardApprovalForNewAgents ≠ true`                                                                                                                                       | `hires-without-board-approval`                                                              |
-| `unique-agent-id`          | one Paperclip id mapped to two slugs in an environment                                                                                                                                  | `duplicate-agent-id`                                                                        |
-| `review-date`              | `reviewedAt` older than **120 days** (warning from 100), or in the future                                                                                                               | `stale-review`                                                                              |
-| `runner-api-tools-off`     | `instance.runnerApiToolsEnabled=true`, or any Terraform file sets `PAPERCLIP_RUNNER_API_TOOLS_ENABLED=true`                                                                             | test                                                                                        |
-| `no-plaintext-secret-env`  | a credential-like name (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE`…) is listed in `adapter.plainEnvAllowed`                                                                        | test                                                                                        |
-| schema                     | missing `owner` / `justification` / `reviewedAt`, unknown permission key, unknown field                                                                                                 | `missing-owner`, `unknown-permission-key`                                                   |
+| Rule                        | Fails when                                                                                                                                                                              | Fixture                                                                                     |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `no-hiring`                 | `canCreateAgents=true` without an explicit `hiringException`; any `agents:create` grant; a `hiringException` while board approval of hires is off. An override cannot add an exception. | `business-can-hire`, `business-hiring-grant`, `override-sneaks-hiring`, `hiring-exception*` |
+| `host-not-full-auto`        | a profile with `runsIn: host` and `approvalMode: full_auto`                                                                                                                             | `business-full-auto`                                                                        |
+| `low-trust-sandbox`         | `low_trust_review` with `runsIn ≠ sandbox`                                                                                                                                              | `low-trust-on-host`                                                                         |
+| `low-trust-boundary`        | `low_trust_review` without `rootIssueId` / `projectIds` / `issueIds`                                                                                                                    | `low-trust-without-scope`                                                                   |
+| `external-send`             | an external-send action is `allowed`, or a send-like action is not flagged `externalSend`                                                                                               | `business-sends-without-approval`, `send-not-flagged`                                       |
+| `board-approval-for-hires`  | `company.requireBoardApprovalForNewAgents ≠ true`                                                                                                                                       | `hires-without-board-approval`                                                              |
+| `unique-agent-id`           | one Paperclip id mapped to two slugs in an environment                                                                                                                                  | `duplicate-agent-id`                                                                        |
+| `review-date`               | `reviewedAt` older than **120 days** (warning from 100), or in the future                                                                                                               | `stale-review`                                                                              |
+| `runner-api-tools-off`      | `instance.runnerApiToolsEnabled=true`, or any Terraform file sets `PAPERCLIP_RUNNER_API_TOOLS_ENABLED=true`                                                                             | test                                                                                        |
+| `plugin-tools-match-bridge` | a `mcp__gs-sandbox__sandbox_*` tool in `adapter.allowedTools` without its plugin tool in `pluginTools`, or the reverse; a duplicate entry                                               | test                                                                                        |
+| `no-plaintext-secret-env`   | a credential-like name (`KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE`…) is listed in `adapter.plainEnvAllowed`                                                                        | test                                                                                        |
+| schema                      | missing `owner` / `justification` / `reviewedAt`, unknown permission key, unknown field                                                                                                 | `missing-owner`, `unknown-permission-key`                                                   |
 
 The 120-day limit fails **every** CI run once any agent is overdue. That is deliberate: it
 is the quarterly access review, and it cannot be skipped silently.
@@ -123,6 +131,7 @@ For every company whose plugin config names an `environment`, it loads the baked
 | explicit grants (`authorization.grants.list`, principal type `agent`)                                                                                                  | `PAPERCLIP_RUNNER_API_TOOLS_ENABLED`: the worker env is curated (enforced statically in CI instead) |
 | `adapterType`, `model`, `dangerouslySkipPermissions`, `--allowedTools`, bypass flags in `extraArgs`, **names** of plaintext `adapterConfig.env` entries (never values) | instance experimental flags: instance settings are not readable by plugins                          |
 | approval mode of an adapter without a verified mapping                                                                                                                 |                                                                                                     |
+|                                                                                                                                                                        | `pluginTools`: tool access profiles are not readable by plugins — use the manual check below        |
 
 **Outputs.** One `backoffice.authz.drift` event per non-`ok` finding, with payload
 `environment, status, agentSlug, agentId, path, expected, actual, reason, trigger`. Statuses:
@@ -287,9 +296,32 @@ Paperclip first shows up as drift until the PR lands, and that is intended.
    was intended, open the PR that makes the file say so.
 4. `missing_agent`: an agent was deleted or the id mapping is wrong; fix it by PR.
 5. `unverifiable`: not an incident. It lists what Paperclip does not let us observe; review
-   those fields by hand during the quarterly access review.
+   those fields by hand during the quarterly access review. For `pluginTools`, run the
+   manual check (section e).
 6. A `BACKOFFICE_JOB_FAILURE` from the job means it could not evaluate (file invalid,
    Paperclip unreadable, plugin not configured): the state is **unknown**, so treat it as an alert.
+
+### e) Check plugin tools by hand (read-only)
+
+The drift plugin cannot read tool access profiles, so `pluginTools` is checked by a
+script baked into the Paperclip image. It sends GET requests only, on loopback, with the
+container's own Paperclip key, and prints tool names, never a credential:
+
+```bash
+TASK=$(aws ecs list-tasks --region eu-west-1 --cluster gs-backoffice-staging \
+  --service-name paperclip --query 'taskArns[0]' --output text)
+aws ecs execute-command --region eu-west-1 --cluster gs-backoffice-staging \
+  --task "$TASK" --container paperclip --interactive \
+  --command "node /opt/gs-agent-tools/check-agent-plugin-tools.mjs staging"
+```
+
+For each declared agent it compares the effective profile's `allowedToolNames`
+(`GET /api/companies/{companyId}/tools/profiles/effective/agents/{agentId}`) with
+`pluginTools`. It also reports any tool **policy**, since the gateway evaluates policies
+before profiles and we declare none. Exit code 0 = match, 1 = drift, 2 = could not check.
+Run it during the quarterly access review and after any change to tool profiles.
+Staging on 2026-11-06: no drift (CEO none; Methods Officer and Engineer the three sandbox
+tools through `gs-sandbox-tools`; no policy).
 
 ### d) Prepare the Paperclip 2026.824.1 → 2026.1023.0 upgrade
 
