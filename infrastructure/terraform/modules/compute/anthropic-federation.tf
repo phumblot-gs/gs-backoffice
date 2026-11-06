@@ -53,10 +53,12 @@ locals {
     { name = "GS_ANTHROPIC_SANDBOX_TOKEN_FILE", value = "/run/anthropic/sandbox-token" },
   ] : []) : [{ name = "GS_ANTHROPIC_AUTH", value = "api_key" }]
 
-  identity_audiences = compact([
-    var.anthropic_federation.agents_audience,
-    trimspace(var.anthropic_federation.sandbox_rule_id) != "" ? var.anthropic_federation.sandbox_audience : "",
-  ])
+  identity_token_audiences = concat(
+    [{ audience = var.anthropic_federation.agents_audience, max_seconds = 300 }],
+    trimspace(var.anthropic_federation.sandbox_rule_id) != "" ? [
+      { audience = var.anthropic_federation.sandbox_audience, max_seconds = 900 },
+    ] : [],
+  )
 }
 
 # STS outbound web identity tokens for the two Anthropic audiences only, short-lived,
@@ -67,18 +69,22 @@ resource "aws_iam_role_policy" "paperclip_identity_token" {
   name  = "anthropic-identity-token"
   role  = aws_iam_role.paperclip_task.id
 
+  # One statement per audience, each with its own maximum lifetime:
+  #  - agents: 300 s — Claude Code re-reads the file and re-exchanges as needed;
+  #  - sandbox: 900 s — Anthropic caps the access token at 2 x the JWT's remaining
+  #    lifetime, and the sandbox needs a 30-min token.
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
+    Statement = [for a in local.identity_token_audiences : {
       Effect   = "Allow"
       Action   = ["sts:GetWebIdentityToken"]
       Resource = "*"
       Condition = {
-        # Audience is multi-valued: every requested audience must be one of ours, and
-        # the key must be present (ForAllValues passes vacuously on an absent key).
-        "ForAllValues:StringEquals" = { "sts:IdentityTokenAudience" = local.identity_audiences }
+        # Every requested audience must be this one, and the key must be present
+        # (ForAllValues passes vacuously on an absent key).
+        "ForAllValues:StringEquals" = { "sts:IdentityTokenAudience" = [a.audience] }
         Null                        = { "sts:IdentityTokenAudience" = "false" }
-        NumericLessThanEquals       = { "sts:DurationSeconds" = 300 }
+        NumericLessThanEquals       = { "sts:DurationSeconds" = a.max_seconds }
         StringEquals                = { "sts:SigningAlgorithm" = "RS256" }
       }
     }]
