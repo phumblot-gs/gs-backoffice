@@ -121,7 +121,10 @@ export function observeAgent(
       : unobservable('adapterConfig not present on the agent record'),
     // Allow-list: ONLY approval-related keys leave this function. Never adapterConfig.env.
     approvalFields: adapterConfig
-      ? observed({ dangerouslySkipPermissions: adapterConfig.dangerouslySkipPermissions })
+      ? observed({
+          dangerouslySkipPermissions: adapterConfig.dangerouslySkipPermissions,
+          engine: adapterConfig.engine,
+        })
       : unobservable('adapterConfig not present on the agent record'),
     allowedTools: adapterConfig
       ? observed(parseAllowedTools(extraArgs))
