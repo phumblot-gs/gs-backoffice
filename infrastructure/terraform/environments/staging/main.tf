@@ -65,8 +65,15 @@ module "compute" {
   # federation, docs/architecture/anthropic-federation.md). The federation ids are
   # identifiers from the Claude Console, not secrets. Flip only after the human
   # prerequisites in the runbook are done.
-  anthropic_auth       = "api_key"
-  anthropic_federation = {}
+  anthropic_auth = "federation"
+  anthropic_federation = {
+    organization_id            = "ae494779-cd53-4949-93e3-96974dc3a93f"
+    agents_rule_id             = "fdrl_01Rdq3ESaHNYnN3kXgb1ULeC"
+    agents_service_account_id  = "svac_019WW7fw8utHwwA2ZZdc1n3Q" # backoffice-agents-staging
+    sandbox_rule_id            = "fdrl_018D9jNBmyfGGJ3GfzGh2o4F"
+    sandbox_service_account_id = "svac_01J7SCvw4ipeXkm5L4G58e5g" # backoffice-sandbox-staging
+    # Issuer henri-staging: fdis_019yLw7Ucfc5SQhUV7HKXCmS (jti check disabled).
+  }
 
   environment  = var.environment
   project_name = var.project_name

@@ -13,8 +13,7 @@ import { chmodSync, renameSync, writeFileSync } from 'node:fs';
  *     read the same file, and each would otherwise be the second presenter of its jti.
  *
  *  2. SANDBOX — a short-lived Anthropic access token minted HERE (one exchange point,
- *     its own service account and rule, `check_jti` kept on: every exchange uses a fresh
- *     JWT), written as JSON to the sandbox token file. The Fly Sprites plugin hands it to
+ *     its own service account and rule, and a fresh JWT for every exchange), written as JSON to the sandbox token file. The Fly Sprites plugin hands it to
  *     the in-sandbox Claude run as ANTHROPIC_AUTH_TOKEN, so the long-lived API key never
  *     enters a sandbox where model-generated code runs.
  *
@@ -42,6 +41,13 @@ export interface FederationConfig {
     tokenFile: string;
     /** Re-mint when the current access token has less than this left. */
     minRemainingSeconds: number;
+    /**
+     * STS lifetime of the JWT presented for the sandbox exchange. Anthropic caps an
+     * access token at min(rule lifetime, 2 × the JWT's remaining lifetime), so a
+     * 300 s JWT could never yield more than ~10 min — below what the plugin requires.
+     * 900 s → up to 1800 s (30 min) with the sandbox rule's lifetime.
+     */
+    identityTokenSeconds: number;
   };
 }
 
@@ -144,7 +150,7 @@ export class Refresher {
       if (remaining < sb.minRemainingSeconds * 1000) {
         try {
           // A FRESH JWT per exchange: the sandbox rule keeps jti replay protection on.
-          const assertion = await this.deps.getIdentityToken(sb.audience, 300);
+          const assertion = await this.deps.getIdentityToken(sb.audience, sb.identityTokenSeconds);
           const token = await exchangeIdentityToken(this.deps, {
             assertion,
             ruleId: sb.ruleId,
@@ -193,6 +199,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): FederationConfig {
       workspaceId: (env.ANTHROPIC_WORKSPACE_ID ?? '').trim() || undefined,
       tokenFile: req('GS_ANTHROPIC_SANDBOX_TOKEN_FILE'),
       minRemainingSeconds: 20 * 60,
+      identityTokenSeconds: 900,
     };
   }
   return cfg;

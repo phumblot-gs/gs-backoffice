@@ -22,6 +22,7 @@ function harness(over: Partial<Deps> = {}, cfgOver: Partial<FederationConfig> = 
   const files = new Map<string, string>();
   const logs: Array<{ level: string; msg: string; meta?: Record<string, unknown> }> = [];
   const audiences: string[] = [];
+  const durations: number[] = [];
   let n = 0;
   const fetchMock = vi.fn(
     async (_url: string | URL | Request, _init?: RequestInit) =>
@@ -31,8 +32,9 @@ function harness(over: Partial<Deps> = {}, cfgOver: Partial<FederationConfig> = 
       ),
   );
   const deps: Deps = {
-    getIdentityToken: async (aud) => {
+    getIdentityToken: async (aud, seconds) => {
       audiences.push(aud);
+      durations.push(seconds);
       return `${JWT}-${++n}`;
     },
     fetch: fetchMock as unknown as typeof fetch,
@@ -55,6 +57,7 @@ function harness(over: Partial<Deps> = {}, cfgOver: Partial<FederationConfig> = 
       serviceAccountId: 'svac_sandbox',
       tokenFile: '/run/anthropic/sandbox-token',
       minRemainingSeconds: 1200,
+      identityTokenSeconds: 900,
     },
     ...cfgOver,
   };
@@ -63,6 +66,7 @@ function harness(over: Partial<Deps> = {}, cfgOver: Partial<FederationConfig> = 
     files,
     logs,
     audiences,
+    durations,
     fetchMock,
     advance: (ms: number) => (t += ms),
   };
@@ -88,6 +92,14 @@ describe('Refresher', () => {
     const assertions = h.fetchMock.mock.calls.map((c) => JSON.parse(String(c[1]!.body)).assertion);
     expect(assertions).toHaveLength(2);
     expect(new Set(assertions).size).toBe(2);
+  });
+
+  it('asks STS for a JWT long enough to yield a 30-min sandbox token (2× cap)', async () => {
+    const h = harness();
+    await h.refresher.tick();
+    expect(h.durations).toEqual([300, 900]);
+    // Anthropic caps the access token at min(rule lifetime, 2 × JWT remaining lifetime).
+    expect(Math.min(1800, 2 * h.durations[1])).toBeGreaterThanOrEqual(1800);
   });
 
   it('does not re-mint the sandbox token while enough lifetime remains', async () => {
