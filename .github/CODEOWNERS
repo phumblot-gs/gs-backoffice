@@ -11,6 +11,7 @@
 # Owners: Pierre (CEO, @phumblot-gs) and Denis (Tech director, @denis-gs). Either may
 # approve the other's change; nobody approves their own.
 /config/agents-authz.json                    @phumblot-gs @denis-gs
+/config/agent-instructions/                  @phumblot-gs @denis-gs
 /packages/core/src/agents-authz*.ts          @phumblot-gs @denis-gs
 /packages/core/src/__fixtures__/agents-authz/ @phumblot-gs @denis-gs
 /packages/authz-drift-plugin/                @phumblot-gs @denis-gs

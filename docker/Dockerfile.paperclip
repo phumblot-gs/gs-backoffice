@@ -74,6 +74,9 @@ RUN mkdir -p /opt/gs-agent-tools/anthropic-federation \
 # Bake the agent authorizations (source of truth for the drift job). Read fail-closed:
 # a missing or invalid file makes the job alert, never pass.
 COPY config/agents-authz.json /opt/gs-agent-tools/agents-authz.json
+# Manual, read-only check of pluginTools against the tool gateway's effective profiles
+# (not readable by plugins). Runbook: docs/architecture/agents-authz.md, section e.
+COPY scripts/check-agent-plugin-tools.mjs /opt/gs-agent-tools/check-agent-plugin-tools.mjs
 
 FROM base AS production
 WORKDIR /app
@@ -103,6 +106,11 @@ RUN mkdir -p /run/anthropic && chown node:node /run/anthropic && chmod 700 /run/
 COPY --from=plugin-build --chown=node:node /opt/gs-plugins /opt/gs-plugins
 # Bake the agent-facing sandbox MCP server + its mcp-config at a stable path.
 COPY --from=plugin-build --chown=node:node /opt/gs-agent-tools /opt/gs-agent-tools
+# Agent instructions, versioned in Git (config/agent-instructions/<slug>/AGENTS.md).
+# Root-owned on purpose: the agents (user node) can read them but never rewrite them.
+# Paperclip's "managed" bundles lived under /paperclip, which Fargate wipes on every
+# deploy; the agents point at these as "external" bundles instead (see the README).
+COPY config/agent-instructions /opt/gs-agent-tools/agent-instructions
 COPY --chown=node:node docker/paperclip-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV NODE_ENV=production

@@ -132,6 +132,8 @@ describe('authz drift job (mocked Paperclip)', () => {
         '-:instance.experimental.enablePublicMcp',
         'engineer:runsIn',
         'engineer:connectors',
+        'engineer:pluginTools',
+        'ceo:pluginTools',
         'engineer:access.canAssignTasks',
         'methods-officer:access.canAssignTasks',
       ]),

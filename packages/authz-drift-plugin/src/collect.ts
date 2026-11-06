@@ -42,6 +42,8 @@ export interface ReadOnlyPaperclip {
 export const UNOBSERVABLE = {
   connectors:
     'no plugin capability exposes tool-connection action states (Allowed / Ask first / Off) in Paperclip 2026.824.1',
+  pluginTools:
+    'tool access profiles are not readable by plugins in 2026.824.1; run scripts/check-agent-plugin-tools.mjs (runbook)',
   runsIn:
     'environment drivers are not readable by plugins in 2026.824.1 (agent defaultEnvironmentId → driver)',
   canAssignTasks:
@@ -115,6 +117,7 @@ export function observeAgent(
       : unobservable('permissions not present on the agent record'),
     grants,
     connectors: unobservable(UNOBSERVABLE.connectors),
+    pluginTools: unobservable(UNOBSERVABLE.pluginTools),
     runsIn: unobservable(UNOBSERVABLE.runsIn),
     model: adapterConfig
       ? observed(typeof adapterConfig.model === 'string' ? adapterConfig.model : null)

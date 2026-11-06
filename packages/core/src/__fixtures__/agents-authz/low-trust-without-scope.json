@@ -45,6 +45,7 @@
           "externalSend": false
         }
       },
+      "pluginTools": [],
       "adapter": {
         "type": "claude_local",
         "model": "claude-sonnet-4-6",
@@ -61,6 +62,7 @@
       "canAssignTasks": false,
       "grants": [],
       "connectors": {},
+      "pluginTools": [],
       "trustBoundary": {
         "mode": "low_trust_review",
         "allowedToolClasses": ["git.read"]
