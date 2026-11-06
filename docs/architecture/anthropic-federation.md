@@ -23,14 +23,14 @@ Inference geography does not change: requests go to the same first-party API as 
 
 ```text
 ECS task role  (gs-backoffice-<env>-paperclip-task, dedicated to Paperclip)
-  │  sts:GetWebIdentityToken  (regional STS, aud ∈ {anthropic-agents, anthropic-sandbox},
-  │                            ≤ 300 s, RS256 — enforced by the IAM policy)
+  │  sts:GetWebIdentityToken  (regional STS, RS256 — enforced by the IAM policy,
+  │                            per audience: anthropic-agents ≤ 300 s, anthropic-sandbox ≤ 900 s)
   ▼
 refresher (packages/anthropic-federation, started by the entrypoint)
   ├─ every 3 min: 5-min JWT (aud=anthropic-agents) → /run/anthropic/identity.jwt (0600)
   │      └─ Claude Code (claude_local agents) reads ANTHROPIC_IDENTITY_TOKEN_FILE and
   │         exchanges it itself → agents rule → service account "agents"
-  └─ when < 20 min left: fresh JWT (aud=anthropic-sandbox) → POST /v1/oauth/token
+  └─ when < 20 min left: fresh 900-s JWT (aud=anthropic-sandbox) → POST /v1/oauth/token
          (sandbox rule) → 30-min access token → /run/anthropic/sandbox-token (0600)
              └─ Fly Sprites plugin → in-sandbox `claude` gets ANTHROPIC_AUTH_TOKEN only
 ```
@@ -50,13 +50,22 @@ Design points:
   obtain an Anthropic token. The new role carries exactly the same application policies
   (secrets, run logs, audit producer) through `for_each`, and `moved` blocks keep the
   shared role's policies in place.
-- **`check_jti` disabled on the agents rule** (decided 2026-11-06). Several concurrent
+- **`check_jti` disabled on the federation issuer** (decided 2026-11-06). `check_jti` is
+  an **issuer** field, not a rule field, so it covers both rules. Several concurrent
   `claude` processes read the same JWT file, and each exchange after the first would be
   refused as `jti_reused`. The compensating controls: a 5-minute JWT, an IAM-enforced
-  audience, a single role ARN, the `workspace:inference` scope only, and a file readable
+  audience, a single role ARN, a single workspace, and a file readable
   only by the `node` user.
-- **`check_jti` kept on for the sandbox rule.** The refresher is the single exchange point
-  and uses a fresh JWT every time.
+  For the sandbox, replay protection adds little: its JWT is minted on demand, presented
+  once, never leaves the Paperclip container, is bound to `anthropic-sandbox` and to one
+  role, and lives 15 minutes at most.
+- **Access-token lifetime is capped at 2 × the JWT's remaining lifetime.** Anthropic
+  issues `min(rule lifetime, 2 × remaining JWT lifetime)`. Agents use 300 s JWTs, so their
+  tokens last up to about 10 minutes, and Claude Code re-exchanges. The sandbox needs 30
+  minutes, so its JWT is 900 s. The IAM policy enforces each maximum per audience.
+- **OAuth scope is `workspace:developer`**, because the Console does not offer
+  `workspace:inference` (2026-11-06). That is equivalent to the current API key. Narrow it
+  to `workspace:inference` when it becomes available: only the rule ids would change.
 - **No silent fallback.** In federation mode, Terraform does not inject the key and the
   entrypoint unsets any that is present (it would shadow federation). When the sandbox
   token file exists, the plugin uses it or fails. It never falls back to a key.
@@ -74,16 +83,21 @@ Design points:
    and only in federation mode.
 2. **Deploy this PR in `api_key` mode first.** This creates the dedicated role. Read its
    ARN from the Terraform output `paperclip_task_role_arn`.
-3. **Claude Console (admin role), Settings → Workload identity federation:**
+3. **Claude Console (admin role), Settings → Workload identity federation.** Use the
+   Console: on our organization (type "Individual Org"), the Admin API answers 404/403
+   even with an `org:admin` OAuth token, so `ant organization:*` cannot manage it.
+   Service accounts are created inside the **Connect workload** wizard, and the manual
+   rule form's target list only shows existing ones.
    - **Issuer:** the URL from step 1, `jwks: discovery`.
    - **Service accounts:** `backoffice-agents-<env>` and `backoffice-sandbox-<env>`, members of the backoffice workspace.
    - **Rule "agents":**
      - match `subject_prefix` = the exact role ARN (no `*`; the ARN already pins the AWS account) and `audience` = `anthropic-agents`. The `claims` matcher only compares top-level strings, and the AWS claims are nested under `https://sts.amazonaws.com/`, so any extra check goes in a CEL `condition` (for example on `aws_account`);
      - target the agents service account;
-     - `workspace:inference`;
+     - `workspace:developer` (`workspace:inference` when available);
      - lifetime 3600 s;
-     - **`check_jti` off**.
-   - **Rule "sandbox":** same match but `audience` = `anthropic-sandbox`, sandbox service account, `workspace:inference`, lifetime **1800 s**, `check_jti` on.
+     - (the jti check is set on the issuer, see below).
+   - **Rule "sandbox":** same match but `audience` = `anthropic-sandbox`, sandbox service account, lifetime **1800 s**.
+   - **Issuer:** disable the jti (replay) check.
    - Record the ids: organization, workspace (only if the rule spans several), both rule ids, both service-account ids.
 4. **PR: flip the environment.** In `environments/<env>/main.tf`, set
    `anthropic_auth = "federation"` and fill `anthropic_federation` with the ids. They are
@@ -119,3 +133,16 @@ harmless without the identity-token policy.
   so they degrade without it. Agent runs are not affected.
 - The refresher runs inside the Paperclip container. If it is killed while the container
   lives, the entrypoint loop restarts it within 5 s.
+
+## Staging configuration (2026-11-06)
+
+| Object                           | Id                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| AWS issuer                       | `https://a1b087d2-6ee6-4f21-be3a-8d0a53982b58.tokens.sts.global.api.aws` |
+| Anthropic issuer `henri-staging` | `fdis_019yLw7Ucfc5SQhUV7HKXCmS` (jti check disabled)                     |
+| Rule "agents"                    | `fdrl_01Rdq3ESaHNYnN3kXgb1ULeC`                                          |
+| Rule "sandbox"                   | `fdrl_018D9jNBmyfGGJ3GfzGh2o4F`                                          |
+| Paperclip task role              | `arn:aws:iam::980539927939:role/gs-backoffice-staging-paperclip-task`    |
+
+Negative test (2026-11-06): JWTs minted for another principal of the account
+(`admin-terraform`) with both audiences were refused by the exchange (HTTP 401).
