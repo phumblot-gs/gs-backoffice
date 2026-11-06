@@ -3,12 +3,19 @@ import type { ApprovalMode } from './agents-authz.js';
 /**
  * Abstract approvalMode → concrete adapterConfig values, per Paperclip adapter type.
  *
- * Only `claude_local` is VERIFIED (field present on every staging agent, 2026.824.1).
- * Paperclip 2026.824.1 has no ACPX adapter, and its OpenAPI spec / shared types carry no
- * approval key for codex_local / opencode_local (`approvalPolicy`, `permissionMode`,
- * `acpxPermissionMode`: 0 occurrences). Those adapters therefore map to `null`: the
- * drift job reports their approval mode as `unverifiable`, never `ok`. Fill a row in
- * only after reading the real key on a running instance (see the runbook).
+ * Only `claude_local` is VERIFIED (staging, 2026.824.1). It has TWO execution engines:
+ *  - `engine: "cli"`: the `claude` CLI. `dangerouslySkipPermissions` and the
+ *    `--allowedTools` list in `extraArgs` apply here, and nowhere else.
+ *  - ACP (`engine: "acp"`, or **unset / "auto", which prefers ACP**): runs with its own
+ *    `permissionMode`, whose default is `approve-all`, and ignores both controls above.
+ *    Found on staging on 2026-11-06: every agent was on the ACP default and the Engineer
+ *    ran shell and edit tools on the Paperclip host instead of the sandbox tools.
+ * A restricted claude_local agent therefore requires `engine: "cli"` as well.
+ *
+ * codex_local / opencode_local carry no documented approval key in 2026.824.1
+ * (`approvalPolicy` appears nowhere). Those rows are `null`: the drift job reports them
+ * as `unverifiable`, never `ok`. Fill a row in only after reading the real key on a
+ * running instance (see the runbook).
  */
 export interface ConcreteApproval {
   /** adapterConfig fields and the value each must hold. */
@@ -33,15 +40,15 @@ export const KNOWN_BYPASS_SEQUENCES: string[][] = [
 export const APPROVAL_MODE_MAP: Record<string, Record<ApprovalMode, ConcreteApproval> | null> = {
   claude_local: {
     restricted: {
-      adapterConfig: { dangerouslySkipPermissions: false },
-      defaultsWhenUnset: { dangerouslySkipPermissions: true },
+      adapterConfig: { dangerouslySkipPermissions: false, engine: 'cli' },
+      defaultsWhenUnset: { dangerouslySkipPermissions: true, engine: 'auto' },
       forbiddenArgSequences: KNOWN_BYPASS_SEQUENCES,
     },
     // claude_local has no distinct read-only switch: read-only is enforced by the
     // `--allowedTools` list (modelled as adapter.allowedTools and drift-checked).
     read_only: {
-      adapterConfig: { dangerouslySkipPermissions: false },
-      defaultsWhenUnset: { dangerouslySkipPermissions: true },
+      adapterConfig: { dangerouslySkipPermissions: false, engine: 'cli' },
+      defaultsWhenUnset: { dangerouslySkipPermissions: true, engine: 'auto' },
       forbiddenArgSequences: KNOWN_BYPASS_SEQUENCES,
     },
     full_auto: {

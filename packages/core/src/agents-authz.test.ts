@@ -187,21 +187,24 @@ describe('CI rules', () => {
 });
 
 describe('approval-mode mapping table', () => {
-  it('maps claude_local modes to dangerouslySkipPermissions', () => {
+  it('maps claude_local modes to dangerouslySkipPermissions and the CLI engine', () => {
     expect(concreteApproval('claude_local', 'restricted')?.adapterConfig).toEqual({
       dangerouslySkipPermissions: false,
+      engine: 'cli',
     });
     expect(concreteApproval('claude_local', 'read_only')?.adapterConfig).toEqual({
       dangerouslySkipPermissions: false,
+      engine: 'cli',
     });
     expect(concreteApproval('claude_local', 'full_auto')?.adapterConfig).toEqual({
       dangerouslySkipPermissions: true,
     });
   });
 
-  it('judges an unset claude_local flag by Paperclip’s permissive default', () => {
+  it('judges unset claude_local fields by Paperclip’s permissive defaults', () => {
     expect(concreteApproval('claude_local', 'restricted')?.defaultsWhenUnset).toEqual({
       dangerouslySkipPermissions: true,
+      engine: 'auto',
     });
   });
 
@@ -267,7 +270,7 @@ function matchingState(): ObservedState {
     connectors: observed({ 'gmail.send': 'ask_first' as const, 'gmail.read': 'allowed' as const }),
     runsIn: observed('host' as const),
     model: observed('claude-sonnet-4-6'),
-    approvalFields: observed({ dangerouslySkipPermissions: false }),
+    approvalFields: observed({ dangerouslySkipPermissions: false, engine: 'cli' }),
     allowedTools: observed(['Grep', 'Read']),
     bypassFlags: observed([]),
     plaintextEnvNames: observed([]),
@@ -322,7 +325,7 @@ describe('drift comparison', () => {
 
   it('detects a switched approval mode, including an unset flag that defaults to bypass', () => {
     const s = matchingState();
-    s.agents[0].approvalFields = observed({ dangerouslySkipPermissions: true });
+    s.agents[0].approvalFields = observed({ dangerouslySkipPermissions: true, engine: 'cli' });
     expect(problems(s)).toContainEqual(
       expect.objectContaining({
         path: 'adapterConfig.dangerouslySkipPermissions',
@@ -330,12 +333,29 @@ describe('drift comparison', () => {
         actual: true,
       }),
     );
-    s.agents[0].approvalFields = observed({});
+    s.agents[0].approvalFields = observed({ engine: 'cli' });
     expect(problems(s)).toContainEqual(
       expect.objectContaining({
         path: 'adapterConfig.dangerouslySkipPermissions',
         actual: 'unset (defaults to true)',
       }),
+    );
+  });
+
+  it('flags the ACP engine (unset = auto) on a restricted claude_local agent', () => {
+    const s = matchingState();
+    s.agents[0].approvalFields = observed({ dangerouslySkipPermissions: false });
+    expect(problems(s)).toEqual([
+      expect.objectContaining({
+        path: 'adapterConfig.engine',
+        status: 'drift',
+        expected: 'cli',
+        actual: 'unset (defaults to "auto")',
+      }),
+    ]);
+    s.agents[0].approvalFields = observed({ dangerouslySkipPermissions: false, engine: 'acp' });
+    expect(problems(s)).toContainEqual(
+      expect.objectContaining({ path: 'adapterConfig.engine', actual: 'acp' }),
     );
   });
 
