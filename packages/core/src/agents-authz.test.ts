@@ -177,6 +177,36 @@ describe('CI rules', () => {
     );
   });
 
+  it('rejects a malformed plugin tool name', () => {
+    const raw = fixture('valid.json') as { agents: Record<string, { pluginTools: string[] }> };
+    raw.agents['chief-of-staff'].pluginTools = ['sandbox_run'];
+    expect(() => parseAgentsAuthz(raw)).toThrow(/pluginTools/);
+  });
+
+  it('requires a bridge sandbox tool and its plugin tool to be allowed together', () => {
+    const SB = 'gs-backoffice.fly-sprites-sandbox-provider:';
+    const harnessOnly = load('valid.json');
+    harnessOnly.agents['chief-of-staff'].adapter.allowedTools = ['mcp__gs-sandbox__sandbox_run'];
+    expect(validateAgentsAuthzRules(harnessOnly, TODAY).errors).toContainEqual(
+      expect.objectContaining({
+        rule: 'plugin-tools-match-bridge',
+        message: expect.stringContaining('gateway would deny'),
+      }),
+    );
+    const gatewayOnly = load('valid.json');
+    gatewayOnly.agents['chief-of-staff'].pluginTools = [`${SB}sandbox_code_task`];
+    expect(validateAgentsAuthzRules(gatewayOnly, TODAY).errors).toContainEqual(
+      expect.objectContaining({
+        rule: 'plugin-tools-match-bridge',
+        message: expect.stringContaining('unused gateway access'),
+      }),
+    );
+    const both = load('valid.json');
+    both.agents['chief-of-staff'].adapter.allowedTools = ['mcp__gs-sandbox__sandbox_release'];
+    both.agents['chief-of-staff'].pluginTools = [`${SB}sandbox_release`];
+    expect(validateAgentsAuthzRules(both, TODAY).errors).toEqual([]);
+  });
+
   it('rejects enabling the runner API tools', () => {
     const cfg = load('valid.json');
     cfg.instance.runnerApiToolsEnabled = true;
@@ -268,6 +298,7 @@ function matchingState(): ObservedState {
     trustBoundary: observed(null),
     grants: observed([{ key: 'tasks:assign' as const }]),
     connectors: observed({ 'gmail.send': 'ask_first' as const, 'gmail.read': 'allowed' as const }),
+    pluginTools: observed([]),
     runsIn: observed('host' as const),
     model: observed('claude-sonnet-4-6'),
     approvalFields: observed({ dangerouslySkipPermissions: false, engine: 'cli' }),
@@ -400,6 +431,31 @@ describe('drift comparison', () => {
         status: 'drift',
         expected: 'secret reference',
         actual: 'plaintext value',
+      }),
+    ]);
+  });
+
+  it('compares plugin tools as an exact set, and says when they cannot be read', () => {
+    const SB = 'gs-backoffice.fly-sprites-sandbox-provider:';
+    const s = matchingState();
+    s.agents[0].pluginTools = observed([`${SB}sandbox_run`]);
+    expect(problems(s)).toEqual([
+      expect.objectContaining({
+        agentSlug: 'chief-of-staff',
+        path: 'pluginTools',
+        status: 'drift',
+        expected: [],
+        actual: [`${SB}sandbox_run`],
+        reason: `extra: ${SB}sandbox_run`,
+      }),
+    ]);
+    s.agents[0].pluginTools = unobservable('profiles not readable');
+    expect(problems(s)).toEqual([
+      expect.objectContaining({
+        path: 'pluginTools',
+        status: 'unverifiable',
+        expected: [],
+        reason: 'profiles not readable',
       }),
     ]);
   });

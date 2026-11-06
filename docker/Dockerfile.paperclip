@@ -74,6 +74,9 @@ RUN mkdir -p /opt/gs-agent-tools/anthropic-federation \
 # Bake the agent authorizations (source of truth for the drift job). Read fail-closed:
 # a missing or invalid file makes the job alert, never pass.
 COPY config/agents-authz.json /opt/gs-agent-tools/agents-authz.json
+# Manual, read-only check of pluginTools against the tool gateway's effective profiles
+# (not readable by plugins). Runbook: docs/architecture/agents-authz.md, section e.
+COPY scripts/check-agent-plugin-tools.mjs /opt/gs-agent-tools/check-agent-plugin-tools.mjs
 
 FROM base AS production
 WORKDIR /app

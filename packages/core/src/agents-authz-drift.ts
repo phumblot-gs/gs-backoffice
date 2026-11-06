@@ -45,6 +45,8 @@ export interface ObservedAgent {
   trustBoundary: Observed<Record<string, unknown> | null>;
   grants: Observed<Grant[]>;
   connectors: Observed<Record<string, ConnectorState>>;
+  /** Plugin tool names the gateway allows (effective tool access profiles). */
+  pluginTools: Observed<string[]>;
   runsIn: Observed<'host' | 'sandbox'>;
   model: Observed<string | null>;
   /** Allow-listed approval-related adapterConfig fields (undefined = unset). */
@@ -339,6 +341,41 @@ function compareAgent(
           reason: 'undeclared connector action',
         });
       }
+    }
+  }
+
+  // Plugin tools allowed by the tool gateway — exact set comparison.
+  if (!obs.pluginTools.observable) {
+    push({
+      agentSlug: s,
+      agentId: id,
+      path: 'pluginTools',
+      status: 'unverifiable',
+      expected: [...exp.pluginTools].sort(),
+      reason: obs.pluginTools.reason,
+    });
+  } else {
+    const want = new Set(exp.pluginTools);
+    const have = new Set(obs.pluginTools.value);
+    const missing = [...want].filter((t) => !have.has(t)).sort();
+    const extra = [...have].filter((t) => !want.has(t)).sort();
+    if (missing.length === 0 && extra.length === 0) {
+      push({ agentSlug: s, agentId: id, path: 'pluginTools', status: 'ok' });
+    } else {
+      push({
+        agentSlug: s,
+        agentId: id,
+        path: 'pluginTools',
+        status: 'drift',
+        expected: [...want].sort(),
+        actual: [...have].sort(),
+        reason: [
+          extra.length ? `extra: ${extra.join(', ')}` : '',
+          missing.length ? `missing: ${missing.join(', ')}` : '',
+        ]
+          .filter(Boolean)
+          .join('; '),
+      });
     }
   }
 
