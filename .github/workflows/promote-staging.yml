@@ -15,8 +15,14 @@ on:
     branches: [main]
 
 permissions:
-  contents: write # push to the staging branch
+  contents: write # merge the promotion PR into staging
+  pull-requests: write # open the main → staging promotion PR
   actions: write # dispatch the Deploy Staging workflow
+
+# One promotion at a time: two merges in quick succession must not race on staging.
+concurrency:
+  group: promote-staging
+  cancel-in-progress: false
 
 jobs:
   promote:
@@ -27,19 +33,48 @@ jobs:
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'deploy:staging')
     steps:
-      - name: Checkout (full history)
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Merge main into staging
+      # Promote through a PR merged with a MERGE COMMIT, never a direct push or a squash.
+      # The `staging-merge-commits-only` ruleset requires a PR and allows only merge
+      # commits on staging; a squash dropped main's history from staging twice (#122,
+      # #125) and made the next promotion conflict. Personal-account repos cannot list
+      # GitHub Actions as a ruleset bypass actor, hence the PR instead of a push.
+      # Requires Settings → Actions → General → "Allow GitHub Actions to create and
+      # approve pull requests".
+      - name: Promote main into staging (PR + merge commit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SOURCE_PR: ${{ github.event.pull_request.number }}
+          SOURCE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main staging
-          git checkout staging
-          git merge --no-edit origin/main
-          git push origin staging
+          set -euo pipefail
+          ahead=$(gh api "repos/$REPO/compare/staging...main" --jq '.ahead_by')
+          if [ "$ahead" = "0" ]; then
+            echo "staging already contains main — nothing to promote."
+            exit 0
+          fi
+          url=$(gh pr list --repo "$REPO" --base staging --head main --state open --json url --jq '.[0].url // empty')
+          if [ -z "$url" ]; then
+            url=$(gh pr create --repo "$REPO" --base staging --head main \
+              --title "Promote main → staging (after #$SOURCE_PR)" \
+              --body "Automatic promotion after merging #$SOURCE_PR ($SOURCE_SHA), labelled deploy:staging. Merged with a merge commit by promote-staging.yml.")
+          fi
+          echo "Promotion PR: $url"
+          # GitHub computes mergeability asynchronously right after creation: retry a
+          # few times. A real conflict still fails the job — staging must never diverge.
+          for attempt in 1 2 3 4 5; do
+            if gh pr merge "$url" --repo "$REPO" --merge \
+                --subject "Promote main → staging (after #$SOURCE_PR)"; then
+              exit 0
+            fi
+            echo "merge attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::Could not merge the promotion PR $url — check for a conflict."
+          exit 1
 
       # Audit (SOC2): record the human go-live decision (the PR merge) in the backoffice
       # trail — it otherwise lives only in GitHub. Best-effort; never fails the promotion.
@@ -55,7 +90,7 @@ jobs:
           EVT_PAYLOAD: '{"prNumber":${{ github.event.pull_request.number }},"url":"${{ github.event.pull_request.html_url }}","branch":"${{ github.event.pull_request.head.ref }}","baseRef":"main","mergedBy":"${{ github.event.pull_request.merged_by.login }}","sha":"${{ github.event.pull_request.merge_commit_sha }}"}'
         run: node scripts/emit-evt.mjs
 
-      # A push made with GITHUB_TOKEN does NOT re-trigger workflows, so trigger the
+      # A merge made with GITHUB_TOKEN does NOT re-trigger workflows, so trigger the
       # staging deploy explicitly on the freshly-updated staging branch.
       - name: Trigger Deploy Staging
         env:
